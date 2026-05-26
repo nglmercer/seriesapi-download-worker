@@ -239,4 +239,15 @@ export const api = {
       { method: "POST" }
     );
   },
+
+  // ── Files ────────────────────────────────────────────────
+
+  listFiles() {
+    return request<{ files: { name: string; path: string; size: number; modified: string; ext: string }[] }>("/api/v1/files");
+  },
+
+  getFileServeUrl(path: string): string {
+    const cfg = getConfig();
+    return `${cfg.baseUrl}/api/v1/files/serve/${path}`;
+  },
 };

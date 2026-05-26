@@ -4,6 +4,7 @@ import { Dashboard } from "./components/downloads/Dashboard";
 import { DownloadList } from "./components/downloads/DownloadList";
 import { QueueList } from "./components/queue/QueueList";
 import { TaskDetail } from "./components/queue/TaskDetail";
+import { Files } from "./components/files/Files";
 import { Settings } from "./components/Settings";
 import { connect } from "./ws/socket";
 
@@ -31,6 +32,8 @@ export function App() {
         return <QueueList onNavigate={handleNavigate} />;
       case "queue-detail":
         return detailId != null ? <TaskDetail taskId={detailId} onNavigate={handleNavigate} /> : <QueueList onNavigate={handleNavigate} />;
+      case "files":
+        return <Files />;
       case "settings":
         return <Settings />;
       default:

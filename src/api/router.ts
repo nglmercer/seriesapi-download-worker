@@ -4,6 +4,7 @@ import type { FileService } from "../services/file.service";
 import type { WorkerConfig } from "../config";
 import { handleDownloadRoute } from "./routes/downloads";
 import { handleQueueRoute } from "./routes/queue";
+import { handleFilesRoute } from "./routes/files";
 import { downloadService } from "./server";
 
 const STATIC_DIR = join(import.meta.dir, "../../web/dist");
@@ -119,6 +120,18 @@ export function createRouter(
     if (path.startsWith("/api/v1/queue")) {
       const result = await handleQueueRoute(method, path, url, req, db, fileService, userId);
       if (result !== null) {
+        return new Response(JSON.stringify(result.data), {
+          status: result.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // Files routes
+    if (path.startsWith("/api/v1/files")) {
+      const result = await handleFilesRoute(method, path, url, req, fileService);
+      if (result !== null) {
+        if (result instanceof Response) return result;
         return new Response(JSON.stringify(result.data), {
           status: result.status,
           headers: { ...corsHeaders, "Content-Type": "application/json" },

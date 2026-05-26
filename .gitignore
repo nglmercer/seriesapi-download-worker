@@ -6,3 +6,4 @@ binaries/ffprobe*
 node_modules/
 dist/
 binaries/temp**
+.manifest.json

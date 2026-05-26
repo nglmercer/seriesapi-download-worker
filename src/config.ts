@@ -1,10 +1,12 @@
+type StorageBackend = "local" | "s3" | "gcs" | "azure";
+
 export interface WorkerConfig {
   port: number;
   host: string;
   databasePath: string;
   sharedApiKey: string;
   mainApiUrl: string;
-  storageBackend: "local" | "s3" | "gcs" | "azure";
+  storageBackend: StorageBackend;
   storageBaseDir: string;
   s3AccessKeyId?: string;
   s3SecretAccessKey?: string;
@@ -28,7 +30,7 @@ export function loadConfig(): WorkerConfig {
     databasePath: process.env.DATABASE_PATH || "data/worker.db",
     sharedApiKey: process.env.SHARED_API_KEY || "change-me",
     mainApiUrl: process.env.MAIN_API_URL || "http://localhost:3000",
-    storageBackend: (process.env.STORAGE_BACKEND as any) || "local",
+    storageBackend: (process.env.STORAGE_BACKEND as StorageBackend) || "local",
     storageBaseDir: process.env.STORAGE_BASE_DIR || "storage",
     s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
     s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
@@ -40,7 +42,10 @@ export function loadConfig(): WorkerConfig {
     gcsKeyFile: process.env.GCS_KEY_FILE,
     azureConnectionString: process.env.AZURE_CONNECTION_STRING,
     azureContainerName: process.env.AZURE_CONTAINER_NAME,
-    maxConcurrentTranscodes: parseInt(process.env.MAX_CONCURRENT_TRANSCODES || "1", 10),
+    maxConcurrentTranscodes: parseInt(
+      process.env.MAX_CONCURRENT_TRANSCODES || "1",
+      10,
+    ),
     ffmpegPath: process.env.FFMPEG_PATH,
     ffprobePath: process.env.FFPROBE_PATH,
   };

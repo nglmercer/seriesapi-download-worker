@@ -13,14 +13,14 @@ bun run dev
 
 ## Architecture
 
-The worker runs on its own port (default `3001`), with its own SQLite database, and exposes:
+The worker runs on its own port (default `5001`), with its own SQLite database, and exposes:
 
 - **HTTP REST API** — download management, transcoding queue CRUD, quality/track configuration
 - **WebSocket** — real-time progress pushes for downloads, transcodes, and HLS-ready events
 - **Scheduled recovery** — resets stale downloads/transcodes on startup
 
 ```
-Client ──► Main API (3000) ──► Worker API (3001)
+Client ──► Main API (3000) ──► Worker API (5001)
               │                      │
               │   WS progress        │
               └──────────────────────┘
@@ -77,7 +77,7 @@ All `/api/` endpoints require `Authorization: Bearer <SHARED_API_KEY>`. User-sco
 ## WebSocket
 
 ```
-ws://localhost:3001/ws
+ws://localhost:5001/ws
 ```
 
 ### Client → Server
@@ -105,7 +105,7 @@ ws://localhost:3001/ws
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3001` | HTTP + WS server port |
+| `PORT` | `5001` | HTTP + WS server port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `DATABASE_PATH` | `data/worker.db` | SQLite database file |
 | `SHARED_API_KEY` | `change-me` | Service-to-service auth key |

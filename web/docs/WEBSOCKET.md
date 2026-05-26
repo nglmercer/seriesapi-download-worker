@@ -3,7 +3,7 @@
 ## Connection
 
 ```
-ws://localhost:3001/ws
+ws://localhost:5001/ws
 ```
 
 The WebSocket server shares the same port as the HTTP server.
@@ -141,7 +141,7 @@ Emitted when a transcode task completes and HLS output is available:
 ## JavaScript Client Example
 
 ```javascript
-const ws = new WebSocket("ws://localhost:3001/ws");
+const ws = new WebSocket("ws://localhost:5001/ws");
 
 ws.onopen = () => {
   ws.send(JSON.stringify({ type: "auth", token: "your-api-key" }));
@@ -190,7 +190,7 @@ function useWebSocket(apiKey: string) {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:3001/ws");
+    const ws = new WebSocket("ws://localhost:5001/ws");
     wsRef.current = ws;
 
     ws.onopen = () => {

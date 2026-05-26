@@ -25,7 +25,7 @@ export interface WorkerConfig {
 
 export function loadConfig(): WorkerConfig {
   return {
-    port: parseInt(process.env.PORT || "3001", 10),
+    port: parseInt(process.env.PORT || "5001", 10),
     host: process.env.HOST || "0.0.0.0",
     databasePath: process.env.DATABASE_PATH || "data/worker.db",
     sharedApiKey: process.env.SHARED_API_KEY || "change-me",

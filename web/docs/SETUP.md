@@ -22,7 +22,7 @@ bun install
 bun run dev
 ```
 
-The worker starts on `http://0.0.0.0:3001` by default.
+The worker starts on `http://0.0.0.0:5001` by default.
 
 ## Web Dashboard Setup
 
@@ -32,7 +32,7 @@ bun install    # or npm install
 bun run dev    # or npm run dev
 ```
 
-The dashboard starts on `http://localhost:5173`. In dev mode, API requests to `/api/*` and `/ws` are proxied to `http://localhost:3001`.
+The dashboard starts on `http://localhost:5173`. In dev mode, API requests to `/api/*` and `/ws` are proxied to `http://localhost:5001`.
 
 ## Environment Variables
 
@@ -40,7 +40,7 @@ The dashboard starts on `http://localhost:5173`. In dev mode, API requests to `/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3001` | HTTP + WS server port |
+| `PORT` | `5001` | HTTP + WS server port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `DATABASE_PATH` | `data/worker.db` | SQLite database file |
 | `SHARED_API_KEY` | `change-me` | Service-to-service auth key |
@@ -64,7 +64,7 @@ The dashboard starts on `http://localhost:5173`. In dev mode, API requests to `/
 ### Dashboard (Settings page)
 
 The dashboard stores its config in `localStorage`:
-- **Worker URL**: Leave empty for same-origin/dev-proxy, or set to `http://your-worker:3001`
+- **Worker URL**: Leave empty for same-origin/dev-proxy, or set to `http://your-worker:5001`
 - **API Key**: Must match `SHARED_API_KEY` in the worker's `.env`
 - **User ID**: Sent as `X-User-Id` header for user-scoped operations
 

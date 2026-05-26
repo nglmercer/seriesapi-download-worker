@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `http://localhost:3001`
+Base URL: `http://localhost:5001`
 
 All `/api/*` endpoints require:
 - `Authorization: Bearer <SHARED_API_KEY>`

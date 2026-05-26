@@ -1,2 +1,7 @@
+.env
+data/
+storage/
+binaries/ffmpeg*
+binaries/ffprobe*
 node_modules/
-binaries/
+dist/

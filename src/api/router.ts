@@ -91,7 +91,11 @@ export function createRouter(
     const corsHeaders = { "Access-Control-Allow-Origin": "*" };
 
     if (path === "/health" && method === "GET") {
-      return jsonResponse({ status: "online", version: "1.0.0", uptime: process.uptime() });
+      return jsonResponse({
+        status: "online",
+        version: "1.0.0",
+        uptime: process.uptime(),
+      });
     }
 
     if (path.startsWith("/api/")) {
@@ -113,7 +117,16 @@ export function createRouter(
     }
 
     if (path.startsWith("/api/v1/queue")) {
-      const result = await handleQueueRoute(method, path, url, req, db, rawDb, fileService, userId);
+      const result = await handleQueueRoute(
+        method,
+        path,
+        url,
+        req,
+        db,
+        rawDb,
+        fileService,
+        userId,
+      );
       if (result !== null) {
         return new Response(JSON.stringify(result.data), {
           status: result.status,

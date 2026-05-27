@@ -1,37 +1,42 @@
-type StorageBackend = "local" | "s3" | "gcs" | "azure";
+import { z } from "zod";
 
-export interface WorkerConfig {
-  port: number;
-  host: string;
-  databasePath: string;
-  sharedApiKey: string;
-  mainApiUrl: string;
-  storageBackend: StorageBackend;
-  storageBaseDir: string;
-  s3AccessKeyId?: string;
-  s3SecretAccessKey?: string;
-  s3Bucket?: string;
-  s3Region?: string;
-  s3Endpoint?: string;
-  gcsProjectId?: string;
-  gcsBucket?: string;
-  gcsKeyFile?: string;
-  azureConnectionString?: string;
-  azureContainerName?: string;
-  maxConcurrentTranscodes: number;
-  ffmpegPath?: string;
-  ffprobePath?: string;
-}
+const StorageBackendSchema = z.enum(["local", "s3", "gcs", "azure"]);
+export type StorageBackend = z.infer<typeof StorageBackendSchema>;
+
+const WorkerConfigSchema = z.object({
+  port: z.coerce.number().int().min(1).max(65535).default(5001),
+  host: z.string().default("0.0.0.0"),
+  databasePath: z.string().min(1).default("data/worker.db"),
+  sharedApiKey: z.string().min(1).default("change-me"),
+  mainApiUrl: z.string().url().default("http://localhost:3000"),
+  storageBackend: StorageBackendSchema.default("local"),
+  storageBaseDir: z.string().min(1).default("storage"),
+  s3AccessKeyId: z.string().optional(),
+  s3SecretAccessKey: z.string().optional(),
+  s3Bucket: z.string().optional(),
+  s3Region: z.string().optional(),
+  s3Endpoint: z.string().optional(),
+  gcsProjectId: z.string().optional(),
+  gcsBucket: z.string().optional(),
+  gcsKeyFile: z.string().optional(),
+  azureConnectionString: z.string().optional(),
+  azureContainerName: z.string().optional(),
+  maxConcurrentTranscodes: z.coerce.number().int().min(1).max(10).default(1),
+  ffmpegPath: z.string().optional(),
+  ffprobePath: z.string().optional(),
+});
+
+export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
 
 export function loadConfig(): WorkerConfig {
-  return {
-    port: parseInt(process.env.PORT || "5001", 10),
-    host: process.env.HOST || "0.0.0.0",
-    databasePath: process.env.DATABASE_PATH || "data/worker.db",
-    sharedApiKey: process.env.SHARED_API_KEY || "change-me",
-    mainApiUrl: process.env.MAIN_API_URL || "http://localhost:3000",
-    storageBackend: (process.env.STORAGE_BACKEND as StorageBackend) || "local",
-    storageBaseDir: process.env.STORAGE_BASE_DIR || "storage",
+  const raw = {
+    port: process.env.PORT,
+    host: process.env.HOST,
+    databasePath: process.env.DATABASE_PATH,
+    sharedApiKey: process.env.SHARED_API_KEY,
+    mainApiUrl: process.env.MAIN_API_URL,
+    storageBackend: process.env.STORAGE_BACKEND,
+    storageBaseDir: process.env.STORAGE_BASE_DIR,
     s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
     s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
     s3Bucket: process.env.S3_BUCKET,
@@ -42,11 +47,20 @@ export function loadConfig(): WorkerConfig {
     gcsKeyFile: process.env.GCS_KEY_FILE,
     azureConnectionString: process.env.AZURE_CONNECTION_STRING,
     azureContainerName: process.env.AZURE_CONTAINER_NAME,
-    maxConcurrentTranscodes: parseInt(
-      process.env.MAX_CONCURRENT_TRANSCODES || "1",
-      10,
-    ),
+    maxConcurrentTranscodes: process.env.MAX_CONCURRENT_TRANSCODES,
     ffmpegPath: process.env.FFMPEG_PATH,
     ffprobePath: process.env.FFPROBE_PATH,
   };
+
+  const result = WorkerConfigSchema.safeParse(raw);
+  if (!result.success) {
+    console.error("[config] Invalid configuration:");
+    for (const issue of result.error.issues) {
+      const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+      console.error(`  - ${path}${issue.message}`);
+    }
+    process.exit(1);
+  }
+
+  return result.data;
 }

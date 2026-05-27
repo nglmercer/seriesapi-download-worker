@@ -2,7 +2,7 @@ import { downloadService, DownloadType } from "../server";
 
 interface RouteResult {
   status: number;
-  data: any;
+  data: Record<string, unknown>;
 }
 
 export async function handleDownloadRoute(
@@ -12,7 +12,8 @@ export async function handleDownloadRoute(
   req: Request,
   userId: number | null,
 ): Promise<RouteResult | null> {
-  if (!downloadService) return { status: 500, data: { error: "Service not initialized" } };
+  if (!downloadService)
+    return { status: 500, data: { error: "Service not initialized" } };
 
   if (method === "GET" && path === "/api/v1/downloads") {
     const tasks = downloadService.getActiveTasks();
@@ -20,8 +21,12 @@ export async function handleDownloadRoute(
   }
 
   if (method === "POST" && path === "/api/v1/downloads") {
-    if (!userId) return { status: 401, data: { error: "X-User-Id header required" } };
-    const body = (await req.json().catch(() => ({}))) as Record<string, any>;
+    if (!userId)
+      return { status: 401, data: { error: "X-User-Id header required" } };
+    const body = (await req.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
     const result = await downloadService.createDownload(userId, {
       url: body.url as string,
       filename: body.filename as string | undefined,

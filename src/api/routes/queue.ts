@@ -1,11 +1,33 @@
+import { z } from "zod";
 import { QueueService } from "../../services/queue/queue.service";
 import { QueueTrackService } from "../../services/queue/queue-track.service";
 import type { DrizzleDb } from "../../db/index";
+import type { Database } from "bun:sqlite";
 import type { FileService } from "../../services/file.service";
+import {
+  PaginationSchema,
+  EntityFiltersSchema,
+  CreateQueueTaskSchema,
+  UpdateQueueTaskSchema,
+  QueueTaskIdSchema,
+  AddQualitySchema,
+  SetQualitiesSchema,
+  AddTrackSchema,
+  UpdateTrackSchema,
+  OutputFiltersSchema,
+  CheckExistingSchema,
+  EntityTypeSchema,
+} from "../../validations";
+import {
+  parseJsonBody,
+  parseQueryParams,
+  jsonResponse,
+  validationErrorResponse,
+} from "../../validations/helpers";
 
 interface RouteResult {
   status: number;
-  data: Record<string, unknown>;
+  data: unknown;
 }
 
 export async function handleQueueRoute(
@@ -14,47 +36,36 @@ export async function handleQueueRoute(
   url: URL,
   req: Request,
   db: DrizzleDb,
+  rawDb: Database,
   fileService: FileService,
   userId: number | null,
 ): Promise<RouteResult | null> {
   if (method === "GET" && path === "/api/v1/queue") {
-    const page = parseInt(url.searchParams.get("page") || "1", 10);
-    const limit = parseInt(url.searchParams.get("limit") || "20", 10);
-    const mediaId = url.searchParams.get("media_id");
-    const seasonId = url.searchParams.get("season_id");
-    const episodeId = url.searchParams.get("episode_id");
-    const result = QueueService.list(db, page, limit, (page - 1) * limit, {
-      media_id: mediaId ? parseInt(mediaId, 10) : undefined,
-      season_id: seasonId ? parseInt(seasonId, 10) : undefined,
-      episode_id: episodeId ? parseInt(episodeId, 10) : undefined,
-    });
+    const paginationResult = parseQueryParams(url, PaginationSchema);
+    if (!paginationResult.success) return { status: 400, data: { error: "Invalid pagination" } };
+
+    const filtersResult = parseQueryParams(url, EntityFiltersSchema);
+    if (!filtersResult.success) return { status: 400, data: { error: "Invalid filters" } };
+
+    const { page, limit } = paginationResult.data;
+    const result = QueueService.list(db, rawDb, page!, limit!, (page! - 1) * limit!, filtersResult.data);
     return { status: 200, data: result };
   }
 
   if (method === "POST" && path === "/api/v1/queue") {
-    const body = (await req.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
-    const result = QueueService.create(db, {
-      title: body.title as string,
-      description: body.description as string | undefined,
-      media_id: body.media_id as number | undefined,
-      season_id: body.season_id as number | undefined,
-      episode_id: body.episode_id as number | undefined,
-      source_video_url: body.source_video_url as string,
-      thumbnail_url: body.thumbnail_url as string | undefined,
-    });
+    const bodyResult = await parseJsonBody(req, CreateQueueTaskSchema);
+    if (!bodyResult.success) return { status: 400, data: { error: "Invalid request body" } };
+
+    const result = QueueService.create(db, bodyResult.data);
     if ("error" in result) return { status: 400, data: result };
     return { status: 201, data: result };
   }
 
   if (method === "GET" && path === "/api/v1/queue/outputs") {
-    const result = QueueService.getOutputs(db, {
-      media_id: url.searchParams.get("media_id") || undefined,
-      season_id: url.searchParams.get("season_id") || undefined,
-      episode_id: url.searchParams.get("episode_id") || undefined,
-    });
+    const filtersResult = parseQueryParams(url, OutputFiltersSchema);
+    if (!filtersResult.success) return { status: 400, data: { error: "Invalid filters" } };
+
+    const result = QueueService.getOutputs(db, filtersResult.data);
     if ("error" in result) return { status: 400, data: result };
     return { status: 200, data: result };
   }
@@ -64,21 +75,23 @@ export async function handleQueueRoute(
   }
 
   if (method === "GET" && path === "/api/v1/queue/check-existing") {
+    const paramsResult = parseQueryParams(url, CheckExistingSchema);
+    if (!paramsResult.success) return { status: 400, data: { error: "Invalid parameters" } };
+
     const result = await QueueService.checkExistingOutputs(
-      url.searchParams.get("media_id") || "",
-      url.searchParams.get("season_id") || undefined,
-      url.searchParams.get("episode_id") || undefined,
+      paramsResult.data.media_id,
+      paramsResult.data.season_id,
+      paramsResult.data.episode_id,
     );
     if ("error" in result) return { status: 400, data: result };
     return { status: 200, data: result };
   }
 
   if (method === "POST" && path === "/api/v1/queue/backfill") {
-    const result = await QueueService.backfillAllOutputs(db, db);
+    const result = await QueueService.backfillAllOutputs(db, rawDb);
     return { status: 200, data: result };
   }
 
-  // Thumbnail by entity
   const thumbEntityMatch = path.match(
     /^\/api\/v1\/queue\/thumbnail\/(media|episode|season)\/(\d+)$/,
   );
@@ -88,7 +101,7 @@ export async function handleQueueRoute(
     const seekParam = url.searchParams.get("seek") || undefined;
     const result = await QueueService.getOrGenerateThumbnail(
       db,
-      db,
+      rawDb,
       entityType,
       entityId,
       seekParam,
@@ -112,17 +125,10 @@ export async function handleQueueRoute(
     }
 
     if (method === "PUT" && !subPath) {
-      const body = (await req.json().catch(() => ({}))) as Record<string>;
-      const result = QueueService.update(db, id, {
-        title: body.title as string | undefined,
-        description: body.description as string | undefined,
-        qualities: body.qualities as string[] | undefined,
-        source_video_url: body.source_video_url as string | undefined,
-        thumbnail_url: body.thumbnail_url as string | undefined,
-        media_id: body.media_id as number | undefined,
-        season_id: body.season_id as number | undefined,
-        episode_id: body.episode_id as number | undefined,
-      });
+      const bodyResult = await parseJsonBody(req, UpdateQueueTaskSchema);
+      if (!bodyResult.success) return { status: 400, data: { error: "Invalid request body" } };
+
+      const result = QueueService.update(db, id, bodyResult.data);
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
     }
@@ -162,23 +168,19 @@ export async function handleQueueRoute(
     }
 
     if (method === "POST" && subPath === "/add-quality") {
-      const body = await req.json().catch(() => ({}));
-      const result = QueueService.addQualityToTask(
-        db,
-        id,
-        body.quality as string,
-      );
+      const bodyResult = await parseJsonBody(req, AddQualitySchema);
+      if (!bodyResult.success) return { status: 400, data: { error: "Invalid request body" } };
+
+      const result = QueueService.addQualityToTask(db, id, bodyResult.data.quality);
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
     }
 
     if (method === "POST" && subPath === "/quality") {
-      const body = await req.json().catch(() => ({}));
-      const result = QueueService.setQualities(
-        db,
-        id,
-        body.qualities as string[],
-      );
+      const bodyResult = await parseJsonBody(req, SetQualitiesSchema);
+      if (!bodyResult.success) return { status: 400, data: { error: "Invalid request body" } };
+
+      const result = QueueService.setQualities(db, id, bodyResult.data.qualities);
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
     }
@@ -202,48 +204,40 @@ export async function handleQueueRoute(
     }
 
     if (method === "POST" && subPath === "/thumbnail") {
-      const seekParam = url.searchParams.get("seek");
-      const result = await QueueService.generateThumbnail(
-        db,
-        db,
-        id,
-        seekParam,
-      );
+      const seekParam = url.searchParams.get("seek") || undefined;
+      const result = await QueueService.generateThumbnail(db, rawDb, id, seekParam);
       if ("error" in result) return { status: 400, data: result };
       return { status: 201, data: result };
     }
 
     if (method === "POST" && subPath === "/backfill") {
-      const result = await QueueService.backfillTaskOutputs(db, db, id);
+      const result = await QueueService.backfillTaskOutputs(db, rawDb, id);
       return { status: 200, data: result };
     }
 
-    // Track management
     const trackMatch = subPath.match(/^\/tracks\/(\d+)$/);
     if (method === "PUT" && trackMatch) {
       const trackId = parseInt(trackMatch[1]!, 10);
-      const body = (await req.json().catch(() => ({}))) as Record<
-        string,
-        unknown
-      >;
-      const result = QueueTrackService.updateTrack(db, id, trackId, body);
+      const bodyResult = await parseJsonBody(req, UpdateTrackSchema);
+      if (!bodyResult.success) return { status: 400, data: { error: "Invalid request body" } };
+
+      const result = QueueTrackService.updateTrack(db, id, trackId, bodyResult.data);
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
     }
 
     if (method === "DELETE" && trackMatch) {
       const trackId = parseInt(trackMatch[1]!, 10);
-      const result = QueueTrackService.removeTrack(db, id, trackId);
+      const result = await QueueTrackService.removeTrack(db, id, trackId);
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: { success: true } };
     }
 
     if (method === "POST" && subPath === "/tracks") {
-      const body = (await req.json().catch(() => ({}))) as Record<
-        string,
-        unknown
-      >;
-      const result = QueueTrackService.addTrack(db, id, body);
+      const bodyResult = await parseJsonBody(req, AddTrackSchema);
+      if (!bodyResult.success) return { status: 400, data: { error: "Invalid request body" } };
+
+      const result = QueueTrackService.addTrack(db, id, bodyResult.data);
       if ("error" in result) return { status: 400, data: result };
       return { status: 201, data: result };
     }

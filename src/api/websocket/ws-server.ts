@@ -30,12 +30,17 @@ export class WebSocketServer {
       open: (ws: ServerWebSocket<unknown>) => {
         console.log("[ws] New connection, awaiting auth");
       },
-      message: async (ws: ServerWebSocket<unknown>, message: string | Buffer) => {
+      message: async (
+        ws: ServerWebSocket<unknown>,
+        message: string | Buffer,
+      ) => {
         try {
           const data = JSON.parse(message.toString());
           await this.handleMessage(ws, data);
         } catch (err) {
-          ws.send(JSON.stringify({ type: "error", error: "Invalid message format" }));
+          ws.send(
+            JSON.stringify({ type: "error", error: "Invalid message format" }),
+          );
         }
       },
       close: (ws: ServerWebSocket<unknown>, code: number, reason: string) => {
@@ -45,7 +50,10 @@ export class WebSocketServer {
     };
   }
 
-  private async handleMessage(ws: ServerWebSocket<unknown>, data: any) {
+  private async handleMessage(
+    ws: ServerWebSocket<unknown>,
+    data: Record<string, unknown>,
+  ) {
     switch (data.type) {
       case "auth": {
         const token = data.token as string;
@@ -53,7 +61,11 @@ export class WebSocketServer {
           ws.close(4001, "Missing token");
           return;
         }
-        const result = await validateToken(token, this.mainApiUrl, this.sharedApiKey);
+        const result = await validateToken(
+          token,
+          this.mainApiUrl,
+          this.sharedApiKey,
+        );
         if (!result.valid || !result.userId) {
           ws.close(4001, "Invalid token");
           return;
@@ -64,7 +76,13 @@ export class WebSocketServer {
           this.userClients.set(result.userId, new Set());
         }
         this.userClients.get(result.userId)!.add(ws);
-        ws.send(JSON.stringify({ type: "connected", userId: result.userId, message: "Authenticated" }));
+        ws.send(
+          JSON.stringify({
+            type: "connected",
+            userId: result.userId,
+            message: "Authenticated",
+          }),
+        );
         break;
       }
       case "subscribe:job": {
@@ -136,13 +154,21 @@ export class WebSocketServer {
 
     bus.on("download:progress", (taskId, userId, progress, data) => {
       const subs = this.jobSubscriptions.get(taskId);
-      const message = JSON.stringify({ type: "download:progress", taskId, userId, progress, ...data });
+      const message = JSON.stringify({
+        type: "download:progress",
+        taskId,
+        userId,
+        progress,
+        ...data,
+      });
       if (subs) {
         for (const uid of subs) {
           const clients = this.userClients.get(uid);
           if (clients) {
             for (const ws of clients) {
-              try { ws.send(message); } catch {}
+              try {
+                ws.send(message);
+              } catch {}
             }
           }
         }
@@ -157,7 +183,9 @@ export class WebSocketServer {
           const clients = this.userClients.get(uid);
           if (clients) {
             for (const ws of clients) {
-              try { ws.send(message); } catch {}
+              try {
+                ws.send(message);
+              } catch {}
             }
           }
         }
@@ -166,7 +194,9 @@ export class WebSocketServer {
         const clients = this.userClients.get(data.userId);
         if (clients) {
           for (const ws of clients) {
-            try { ws.send(message); } catch {}
+            try {
+              ws.send(message);
+            } catch {}
           }
         }
       }
@@ -175,29 +205,50 @@ export class WebSocketServer {
     bus.on("hls:ready", (data) => {
       const message = JSON.stringify({ type: "hls:ready", ...data });
       if (data.media_id) {
-        const mediaSubs = this.entitySubscriptions.get(`media:${data.media_id}`);
+        const mediaSubs = this.entitySubscriptions.get(
+          `media:${data.media_id}`,
+        );
         if (mediaSubs) {
           for (const uid of mediaSubs) {
             const clients = this.userClients.get(uid);
-            if (clients) for (const ws of clients) { try { ws.send(message); } catch {} }
+            if (clients)
+              for (const ws of clients) {
+                try {
+                  ws.send(message);
+                } catch {}
+              }
           }
         }
       }
       if (data.season_id) {
-        const seasonSubs = this.entitySubscriptions.get(`season:${data.season_id}`);
+        const seasonSubs = this.entitySubscriptions.get(
+          `season:${data.season_id}`,
+        );
         if (seasonSubs) {
           for (const uid of seasonSubs) {
             const clients = this.userClients.get(uid);
-            if (clients) for (const ws of clients) { try { ws.send(message); } catch {} }
+            if (clients)
+              for (const ws of clients) {
+                try {
+                  ws.send(message);
+                } catch {}
+              }
           }
         }
       }
       if (data.episode_id) {
-        const episodeSubs = this.entitySubscriptions.get(`episode:${data.episode_id}`);
+        const episodeSubs = this.entitySubscriptions.get(
+          `episode:${data.episode_id}`,
+        );
         if (episodeSubs) {
           for (const uid of episodeSubs) {
             const clients = this.userClients.get(uid);
-            if (clients) for (const ws of clients) { try { ws.send(message); } catch {} }
+            if (clients)
+              for (const ws of clients) {
+                try {
+                  ws.send(message);
+                } catch {}
+              }
           }
         }
       }

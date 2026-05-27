@@ -1,18 +1,22 @@
 import { join, extname } from "path";
 import { readdirSync, statSync, existsSync } from "fs";
+import { z } from "zod";
 import type { FileService } from "../../services/file.service";
+import { jsonResponse, validationErrorResponse } from "../../validations/helpers";
 
-interface VideoFile {
-  name: string;
-  path: string;
-  size: number;
-  modified: string;
-  ext: string;
-}
+const VideoFileSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  size: z.number(),
+  modified: z.string(),
+  ext: z.string(),
+});
+
+type VideoFile = z.infer<typeof VideoFileSchema>;
 
 interface RouteResult {
   status: number;
-  data: Record<string, unknown> | { files: VideoFile[] } | { error: string };
+  data: unknown;
 }
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mkv", ".webm", ".avi", ".mov", ".ts", ".m4v"]);
@@ -85,7 +89,6 @@ export async function handleFilesRoute(
     });
   }
 
-  // Upload video file
   if (method === "POST" && path === "/api/v1/files/upload") {
     try {
       const formData = await req.formData();
@@ -94,15 +97,23 @@ export async function handleFilesRoute(
         return { status: 400, data: { error: "No file provided" } };
       }
 
+      if (file.size === 0) {
+        return { status: 400, data: { error: "File cannot be empty" } };
+      }
+
       const ext = extname(file.name).toLowerCase();
       if (!VIDEO_EXTENSIONS.has(ext)) {
-        return { status: 400, data: { error: `Unsupported file type: ${ext}. Allowed: ${[...VIDEO_EXTENSIONS].join(", ")}` } };
+        return {
+          status: 400,
+          data: {
+            error: `Unsupported file type: ${ext}. Allowed: ${[...VIDEO_EXTENSIONS].join(", ")}`,
+          },
+        };
       }
 
       const uploadsDir = fileService.getUploadsDir();
       fileService.ensureDir(uploadsDir);
 
-      // Sanitize filename: strip path components, prefix with timestamp
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const destFilename = `${Date.now()}-${safeName}`;
       const destPath = join(uploadsDir, destFilename);

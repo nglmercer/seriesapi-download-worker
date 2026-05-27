@@ -2,14 +2,22 @@ import { join, extname } from "path";
 import { readdirSync, statSync, existsSync } from "fs";
 import type { FileService } from "../../services/file.service";
 
+interface VideoFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+  ext: string;
+}
+
 interface RouteResult {
   status: number;
-  data: any;
+  data: Record<string, unknown> | { files: VideoFile[] } | { error: string };
 }
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mkv", ".webm", ".avi", ".mov", ".ts", ".m4v"]);
 
-function walkDir(dir: string, base: string, results: any[], depth = 0) {
+function walkDir(dir: string, base: string, results: VideoFile[], depth = 0) {
   if (depth > 5) return;
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -46,7 +54,7 @@ export async function handleFilesRoute(
 ): Promise<RouteResult | Response | null> {
   if (method === "GET" && path === "/api/v1/files") {
     const baseDir = fileService.getUploadsDir();
-    const files: any[] = [];
+    const files: VideoFile[] = [];
     walkDir(baseDir, "", files);
     files.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
     return { status: 200, data: { files } };
@@ -112,8 +120,9 @@ export async function handleFilesRoute(
           size: stats.size,
         },
       };
-    } catch (e: any) {
-      return { status: 500, data: { error: `Upload failed: ${e.message}` } };
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      return { status: 500, data: { error: `Upload failed: ${message}` } };
     }
   }
 

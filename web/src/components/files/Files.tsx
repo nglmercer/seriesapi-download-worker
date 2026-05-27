@@ -2,14 +2,7 @@ import { useEffect, useState, useRef } from "preact/hooks";
 import { api } from "../../api/client";
 import { addToast } from "../../state";
 import { t } from "../../i18n";
-
-interface VideoFile {
-  name: string;
-  path: string;
-  size: number;
-  modified: string;
-  ext: string;
-}
+import type { VideoFile } from "../../types";
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -49,8 +42,9 @@ export function Files() {
     try {
       const res = await api.listFiles();
       setFiles(res.files);
-    } catch (e: any) {
-      addToast("error", `${t("common.error")}: ${e.message}`);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      addToast("error", `${t("common.error")}: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -62,8 +56,9 @@ export function Files() {
       await api.uploadFile(file);
       addToast("success", t("files.uploadSuccess"));
       await loadFiles();
-    } catch (e: any) {
-      addToast("error", `${t("files.uploadError")}: ${e.message}`);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      addToast("error", `${t("files.uploadError")}: ${message}`);
     } finally {
       setUploading(false);
     }

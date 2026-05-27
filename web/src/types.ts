@@ -152,3 +152,64 @@ export interface ApiConfig {
   apiKey: string;
   userId: number;
 }
+
+export interface VideoFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+  ext: string;
+}
+
+export interface FileUploadResponse {
+  success: boolean;
+  filename: string;
+  original_name: string;
+  path: string;
+  size: number;
+}
+
+export interface HealthResponse {
+  status: string;
+  version: string;
+  uptime: number;
+}
+
+export interface ThumbnailResponse {
+  id: number;
+  url: string;
+  seek_time: string;
+  task_id: number;
+}
+
+export interface EntityThumbnailResponse {
+  url: string;
+  generated: boolean;
+  file_id?: number;
+}
+
+export interface ProbeQueueResponse extends ProbeResult {
+  source_video_info: string;
+  qualities: string[];
+}
+
+export interface ExistingContentResponse {
+  qualities: string[];
+  subtitles: string[];
+  audio: string[];
+}
+
+export interface BackfillResponse {
+  totalOutputs?: number;
+  updated: number;
+  errors: number;
+}
+
+export interface SuccessResponse {
+  success: boolean;
+}
+
+export interface QualitiesResponse {
+  qualities: string[];
+  configs: Record<string, QualityConfig>;
+}

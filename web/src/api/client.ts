@@ -6,12 +6,26 @@ import type {
   ProbeResult,
   HlsOutput,
   MediaTrack,
+  VideoFile,
+  FileUploadResponse,
+  HealthResponse,
+  ThumbnailResponse,
+  EntityThumbnailResponse,
+  ProbeQueueResponse,
+  ExistingContentResponse,
+  BackfillResponse,
+  SuccessResponse,
+  QualitiesResponse,
 } from "../types";
 
 function getConfig(): ApiConfig {
   const stored = localStorage.getItem("worker-api-config");
   if (stored) return JSON.parse(stored);
   return { baseUrl: "", apiKey: "change-me", userId: 1 };
+}
+
+interface ErrorResponse {
+  error?: string;
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -21,11 +35,14 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     Authorization: `Bearer ${cfg.apiKey}`,
     "X-User-Id": String(cfg.userId),
     "Content-Type": "application/json",
-    ...(opts.headers as Record<string, string> || {}),
+    ...(opts.headers as Record<string, string> ?? {}),
   };
   const res = await fetch(url, { ...opts, headers });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  const data: unknown = await res.json();
+  if (!res.ok) {
+    const errData = data as ErrorResponse;
+    throw new Error(errData?.error ?? `HTTP ${res.status}`);
+  }
   return data as T;
 }
 
@@ -37,7 +54,7 @@ export const api = {
   getConfig,
 
   health() {
-    return request<{ status: string; version: string; uptime: number }>("/health");
+    return request<HealthResponse>("/health");
   },
 
   // ── Downloads ──────────────────────────────────────────────
@@ -58,21 +75,21 @@ export const api = {
   },
 
   deleteDownload(id: string, deleteFiles = false) {
-    return request<{ success: boolean }>(`/api/v1/downloads/${id}?deleteFiles=${deleteFiles}`, {
+    return request<SuccessResponse>(`/api/v1/downloads/${id}?deleteFiles=${deleteFiles}`, {
       method: "DELETE",
     });
   },
 
   pauseDownload(id: string) {
-    return request<{ success: boolean }>(`/api/v1/downloads/${id}/pause`, { method: "POST" });
+    return request<SuccessResponse>(`/api/v1/downloads/${id}/pause`, { method: "POST" });
   },
 
   resumeDownload(id: string) {
-    return request<{ success: boolean }>(`/api/v1/downloads/${id}/resume`, { method: "POST" });
+    return request<SuccessResponse>(`/api/v1/downloads/${id}/resume`, { method: "POST" });
   },
 
   cancelDownload(id: string) {
-    return request<{ success: boolean }>(`/api/v1/downloads/${id}/cancel`, { method: "POST" });
+    return request<SuccessResponse>(`/api/v1/downloads/${id}/cancel`, { method: "POST" });
   },
 
   // ── Queue ──────────────────────────────────────────────────
@@ -112,22 +129,22 @@ export const api = {
   },
 
   deleteQueueTask(id: number) {
-    return request<{ success: boolean }>(`/api/v1/queue/${id}`, { method: "DELETE" });
+    return request<SuccessResponse>(`/api/v1/queue/${id}`, { method: "DELETE" });
   },
 
   startQueueTask(id: number) {
-    return request<{ success: boolean }>(`/api/v1/queue/${id}/start`, { method: "POST" });
+    return request<SuccessResponse>(`/api/v1/queue/${id}/start`, { method: "POST" });
   },
 
   probeQueueTask(id: number) {
-    return request<ProbeResult & { source_video_info: string; qualities: string[] }>(
+    return request<ProbeQueueResponse>(
       `/api/v1/queue/${id}/probe`,
       { method: "POST" }
     );
   },
 
   stopQueueTask(id: number) {
-    return request<{ success: boolean }>(`/api/v1/queue/${id}/stop`, { method: "POST" });
+    return request<SuccessResponse>(`/api/v1/queue/${id}/stop`, { method: "POST" });
   },
 
   restartQueueTask(id: number) {
@@ -171,14 +188,14 @@ export const api = {
 
   generateThumbnail(id: number, seek?: string) {
     const params = seek ? `?seek=${seek}` : "";
-    return request<{ id: number; url: string; seek_time: string; task_id: number }>(
+    return request<ThumbnailResponse>(
       `/api/v1/queue/${id}/thumbnail${params}`,
       { method: "POST" }
     );
   },
 
   backfillTask(id: number) {
-    return request<{ updated: number; errors: number }>(`/api/v1/queue/${id}/backfill`, {
+    return request<BackfillResponse>(`/api/v1/queue/${id}/backfill`, {
       method: "POST",
     });
   },
@@ -198,7 +215,7 @@ export const api = {
   },
 
   deleteTrack(id: number, trackId: number) {
-    return request<{ success: boolean }>(`/api/v1/queue/${id}/tracks/${trackId}`, {
+    return request<SuccessResponse>(`/api/v1/queue/${id}/tracks/${trackId}`, {
       method: "DELETE",
     });
   },
@@ -214,27 +231,27 @@ export const api = {
   },
 
   getQualities() {
-    return request<{ qualities: string[]; configs: Record<string, unknown> }>("/api/v1/queue/qualities");
+    return request<QualitiesResponse>("/api/v1/queue/qualities");
   },
 
   checkExisting(mediaId: string, seasonId?: string, episodeId?: string) {
     const params = new URLSearchParams({ media_id: mediaId });
     if (seasonId) params.set("season_id", seasonId);
     if (episodeId) params.set("episode_id", episodeId);
-    return request<{ qualities: string[]; subtitles: string[]; audio: string[] }>(
+    return request<ExistingContentResponse>(
       `/api/v1/queue/check-existing?${params}`
     );
   },
 
   backfillAll() {
-    return request<{ totalOutputs: number; updated: number; errors: number }>("/api/v1/queue/backfill", {
+    return request<BackfillResponse>("/api/v1/queue/backfill", {
       method: "POST",
     });
   },
 
   generateEntityThumbnail(type: "media" | "episode" | "season", entityId: number, seek?: string) {
     const params = seek ? `?seek=${seek}` : "";
-    return request<{ url: string; generated: boolean; file_id?: number }>(
+    return request<EntityThumbnailResponse>(
       `/api/v1/queue/thumbnail/${type}/${entityId}${params}`,
       { method: "POST" }
     );
@@ -243,7 +260,7 @@ export const api = {
   // ── Files ────────────────────────────────────────────────
 
   listFiles() {
-    return request<{ files: { name: string; path: string; size: number; modified: string; ext: string }[] }>("/api/v1/files");
+    return request<{ files: VideoFile[] }>("/api/v1/files");
   },
 
   getFileServeUrl(path: string): string {
@@ -251,7 +268,7 @@ export const api = {
     return `${cfg.baseUrl}/api/v1/files/serve/${path}`;
   },
 
-  uploadFile(file: File): Promise<{ success: boolean; filename: string; original_name: string; path: string; size: number }> {
+  uploadFile(file: File): Promise<FileUploadResponse> {
     const cfg = getConfig();
     const url = `${cfg.baseUrl}/api/v1/files/upload`;
     const formData = new FormData();
@@ -264,9 +281,12 @@ export const api = {
       },
       body: formData,
     }).then(async (res) => {
-      const data: any = await res.json();
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      return data;
+      const data: unknown = await res.json();
+      if (!res.ok) {
+        const errData = data as ErrorResponse;
+        throw new Error(errData?.error ?? `HTTP ${res.status}`);
+      }
+      return data as FileUploadResponse;
     });
   },
 };

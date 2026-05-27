@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import { config, saveConfig, addToast } from "../state";
 import { api } from "../api/client";
+import { t } from "../i18n";
 
 export function Settings() {
   const [baseUrl, setBaseUrl] = useState(config.value.baseUrl);
@@ -15,19 +16,16 @@ export function Settings() {
       userId: parseInt(userId) || 1,
     };
     saveConfig(cfg);
-    addToast("success", "Settings saved");
+    addToast("success", t("settings.saved"));
   }
 
   async function handleTest() {
     setTesting(true);
     try {
       const res = await api.health();
-      addToast(
-        "success",
-        `Worker online — v${res.version} (uptime ${Math.round(res.uptime)}s)`,
-      );
+      addToast("success", t("settings.online", { version: res.version, uptime: Math.round(res.uptime) }));
     } catch (e: any) {
-      addToast("error", `Connection failed: ${e.message}`);
+      addToast("error", t("settings.failed", { error: e.message }));
     } finally {
       setTesting(false);
     }
@@ -36,42 +34,42 @@ export function Settings() {
   return (
     <div class="max-w-xl space-y-6 animate-fade-in">
       <div>
-        <h2 class="text-xl font-bold text-surface-100">Settings</h2>
-        <p class="text-sm text-surface-500 mt-1">Configure the connection to your worker backend.</p>
+        <h2 class="text-xl font-bold text-surface-100">{t("settings.title")}</h2>
+        <p class="text-sm text-surface-500 mt-1">{t("settings.subtitle")}</p>
       </div>
 
       <div class="bg-surface-900/50 border border-surface-800/50 rounded-xl p-5 space-y-5">
         <div>
-          <label class="block text-[13px] text-surface-300 mb-1.5 font-medium">Worker URL</label>
+          <label class="block text-[13px] text-surface-300 mb-1.5 font-medium">{t("settings.workerUrl")}</label>
           <input
             value={baseUrl}
             onInput={(e) => setBaseUrl((e.target as HTMLInputElement).value)}
-            placeholder="http://localhost:5001 (leave empty for same-origin)"
+            placeholder={t("settings.workerUrlPlaceholder")}
             class="w-full bg-surface-800/60 border border-surface-700/50 rounded-lg px-3 py-2.5 text-sm text-surface-100 placeholder:text-surface-600 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
           />
-          <p class="text-[11px] text-surface-500 mt-1.5">Leave empty if serving from the same origin (production) or through Vite proxy (dev).</p>
+          <p class="text-[11px] text-surface-500 mt-1.5">{t("settings.workerUrlHelp")}</p>
         </div>
 
         <div>
-          <label class="block text-[13px] text-surface-300 mb-1.5 font-medium">API Key</label>
+          <label class="block text-[13px] text-surface-300 mb-1.5 font-medium">{t("settings.apiKey")}</label>
           <input
             value={apiKey}
             onInput={(e) => setApiKey((e.target as HTMLInputElement).value)}
             type="password"
             class="w-full bg-surface-800/60 border border-surface-700/50 rounded-lg px-3 py-2.5 text-sm text-surface-100 placeholder:text-surface-600 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
           />
-          <p class="text-[11px] text-surface-500 mt-1.5">Must match the SHARED_API_KEY in your worker's .env file.</p>
+          <p class="text-[11px] text-surface-500 mt-1.5">{t("settings.apiKeyHelp")}</p>
         </div>
 
         <div>
-          <label class="block text-[13px] text-surface-300 mb-1.5 font-medium">User ID</label>
+          <label class="block text-[13px] text-surface-300 mb-1.5 font-medium">{t("settings.userId")}</label>
           <input
             value={userId}
             onInput={(e) => setUserId((e.target as HTMLInputElement).value)}
             type="number"
             class="w-full bg-surface-800/60 border border-surface-700/50 rounded-lg px-3 py-2.5 text-sm text-surface-100 placeholder:text-surface-600 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
           />
-          <p class="text-[11px] text-surface-500 mt-1.5">Sent as X-User-Id header for user-scoped operations.</p>
+          <p class="text-[11px] text-surface-500 mt-1.5">{t("settings.userIdHelp")}</p>
         </div>
 
         <div class="flex gap-3 pt-1">
@@ -79,7 +77,7 @@ export function Settings() {
             onClick={handleSave}
             class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
           >
-            Save Changes
+            {t("settings.save")}
           </button>
           <button
             onClick={handleTest}
@@ -87,17 +85,17 @@ export function Settings() {
             class="px-5 py-2.5 bg-surface-800 hover:bg-surface-700 disabled:opacity-50 text-surface-200 text-sm font-medium rounded-lg border border-surface-700/50 transition-colors flex items-center gap-2"
           >
             {testing && <div class="w-3.5 h-3.5 border-2 border-surface-500 border-t-surface-200 rounded-full animate-spin" />}
-            {testing ? "Testing..." : "Test Connection"}
+            {testing ? t("settings.testing") : t("settings.test")}
           </button>
         </div>
       </div>
 
       <div class="bg-surface-900/50 border border-surface-800/50 rounded-xl p-5">
-        <h3 class="text-sm font-semibold text-surface-200 mb-3">About</h3>
+        <h3 class="text-sm font-semibold text-surface-200 mb-3">{t("settings.about")}</h3>
         <div class="text-sm text-surface-400 space-y-1.5">
-          <p class="font-medium text-surface-300">SeriesAPI Worker Dashboard <span class="text-surface-500">v1.0.0</span></p>
-          <p>Built with Preact + Tailwind CSS + Vite</p>
-          <p class="text-surface-500 text-xs pt-1">Manages file downloads and FFmpeg transcoding for the SeriesAPI platform.</p>
+          <p class="font-medium text-surface-300">{t("settings.aboutTitle")}</p>
+          <p>{t("settings.aboutBuilt")}</p>
+          <p class="text-surface-500 text-xs pt-1">{t("settings.aboutDesc")}</p>
         </div>
       </div>
     </div>

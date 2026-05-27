@@ -1,15 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
-import {
-  downloads,
-  refreshDownloads,
-  addToast,
-} from "../../state";
+import { downloads, refreshDownloads, addToast, updateDownloadProgress } from "../../state";
 import { api } from "../../api/client";
 import { subscribeJob, unsubscribeJob, onMessage } from "../../ws/socket";
-import { updateDownloadProgress } from "../../state";
 import { ProgressBar } from "../common/ProgressBar";
 import { StatusBadge } from "../common/StatusBadge";
 import { Modal } from "../common/Modal";
+import { t } from "../../i18n";
 import type { DownloadProgressMsg } from "../../types";
 
 export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }) {
@@ -48,7 +44,7 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
     setCreating(true);
     try {
       const res = await api.createDownload({ url: url.trim(), filename: filename.trim() || undefined, type });
-      addToast("success", `Download created: ${res.taskId}`);
+      addToast("success", `${t("dl.created")}: ${res.taskId}`);
       setShowCreate(false);
       setUrl("");
       setFilename("");
@@ -66,7 +62,7 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
       else if (action === "resume") await api.resumeDownload(id);
       else if (action === "cancel") await api.cancelDownload(id);
       else if (action === "delete") await api.deleteDownload(id, true);
-      addToast("success", `Download ${action}d`);
+      addToast("success", t(`dl.${action === "delete" ? "deleted" : action === "pause" ? "paused" : action === "resume" ? "resumed" : "canceled"}`));
       await refreshDownloads();
     } catch (e: any) {
       addToast("error", e.message);
@@ -81,35 +77,35 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
   }
 
   return (
-    <div class="space-y-4">
+    <div class="space-y-4 animate-fade-in">
       <div class="flex items-center justify-between">
-        <h2 class="text-xl font-bold text-surface-100">Downloads</h2>
+        <h2 class="text-xl font-bold text-surface-100">{t("dl.title")}</h2>
         <button
           onClick={() => setShowCreate(true)}
           class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
         >
-          + New Download
+          {t("dl.new")}
         </button>
       </div>
 
-      <div class="bg-surface-900 border border-surface-800 rounded-xl overflow-hidden">
+      <div class="bg-surface-900/50 border border-surface-800/50 rounded-xl overflow-hidden">
         <table class="w-full text-sm">
           <thead>
-            <tr class="border-b border-surface-800 text-surface-400 text-left">
-              <th class="px-4 py-3 font-medium">Filename</th>
-              <th class="px-4 py-3 font-medium">Type</th>
-              <th class="px-4 py-3 font-medium">Status</th>
-              <th class="px-4 py-3 font-medium w-48">Progress</th>
-              <th class="px-4 py-3 font-medium">Size</th>
-              <th class="px-4 py-3 font-medium text-right">Actions</th>
+            <tr class="border-b border-surface-800/50 text-surface-400 text-left">
+              <th class="px-4 py-3 font-medium">{t("dl.filename")}</th>
+              <th class="px-4 py-3 font-medium">{t("dl.type")}</th>
+              <th class="px-4 py-3 font-medium">{t("dl.status")}</th>
+              <th class="px-4 py-3 font-medium w-48">{t("dl.progress")}</th>
+              <th class="px-4 py-3 font-medium">{t("dl.size")}</th>
+              <th class="px-4 py-3 font-medium text-right">{t("dl.actions")}</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-surface-800">
+          <tbody class="divide-y divide-surface-800/50">
             {downloads.value.length === 0 && (
-              <tr><td colSpan={6} class="px-4 py-12 text-center text-surface-500">No downloads</td></tr>
+              <tr><td colSpan={6} class="px-4 py-12 text-center text-surface-500">{t("dl.noDownloads")}</td></tr>
             )}
             {downloads.value.map((d) => (
-              <tr key={d.id} class="hover:bg-surface-800/50 transition-colors">
+              <tr key={d.id} class="hover:bg-surface-800/30 transition-colors">
                 <td class="px-4 py-3">
                   <p class="text-surface-200 truncate max-w-xs" title={d.filename}>{d.filename}</p>
                   <p class="text-xs text-surface-500 truncate max-w-xs" title={d.url}>{d.url}</p>
@@ -121,7 +117,7 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
                 <td class="px-4 py-3">
                   <ProgressBar
                     value={d.progress}
-                    color={d.status === "failed" ? "bg-red-500" : d.status === "completed" ? "bg-green-500" : "bg-blue-500"}
+                    color={d.status === "failed" ? "bg-red-500" : d.status === "completed" ? "bg-emerald-500" : "bg-blue-500"}
                   />
                 </td>
                 <td class="px-4 py-3 text-xs text-surface-400">
@@ -130,15 +126,15 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
                 <td class="px-4 py-3 text-right">
                   <div class="flex items-center justify-end gap-1">
                     {d.status === "downloading" && (
-                      <button onClick={() => handleAction(d.id, "pause")} class="px-2 py-1 text-xs text-yellow-400 hover:bg-surface-700 rounded" title="Pause">Pause</button>
+                      <button onClick={() => handleAction(d.id, "pause")} class="px-2 py-1 text-xs text-yellow-400 hover:bg-surface-700 rounded">{t("dl.pause")}</button>
                     )}
                     {d.status === "paused" && (
-                      <button onClick={() => handleAction(d.id, "resume")} class="px-2 py-1 text-xs text-green-400 hover:bg-surface-700 rounded" title="Resume">Resume</button>
+                      <button onClick={() => handleAction(d.id, "resume")} class="px-2 py-1 text-xs text-green-400 hover:bg-surface-700 rounded">{t("dl.resume")}</button>
                     )}
                     {(d.status === "downloading" || d.status === "paused" || d.status === "pending") && (
-                      <button onClick={() => handleAction(d.id, "cancel")} class="px-2 py-1 text-xs text-orange-400 hover:bg-surface-700 rounded" title="Cancel">Cancel</button>
+                      <button onClick={() => handleAction(d.id, "cancel")} class="px-2 py-1 text-xs text-orange-400 hover:bg-surface-700 rounded">{t("dl.cancel")}</button>
                     )}
-                    <button onClick={() => handleAction(d.id, "delete")} class="px-2 py-1 text-xs text-red-400 hover:bg-surface-700 rounded" title="Delete">Del</button>
+                    <button onClick={() => handleAction(d.id, "delete")} class="px-2 py-1 text-xs text-red-400 hover:bg-surface-700 rounded">{t("dl.delete")}</button>
                   </div>
                 </td>
               </tr>
@@ -147,28 +143,28 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
         </table>
       </div>
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New Download">
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("dl.createTitle")}>
         <div class="space-y-4">
           <div>
-            <label class="block text-sm text-surface-300 mb-1">URL *</label>
+            <label class="block text-sm text-surface-300 mb-1">{t("dl.url")}</label>
             <input
               value={url}
               onInput={(e) => setUrl((e.target as HTMLInputElement).value)}
-              placeholder="https://... or magnet:?xt=..."
+              placeholder={t("dl.urlPlaceholder")}
               class="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-surface-100 focus:outline-none focus:border-blue-500"
             />
           </div>
           <div>
-            <label class="block text-sm text-surface-300 mb-1">Filename (optional)</label>
+            <label class="block text-sm text-surface-300 mb-1">{t("dl.filenameOpt")}</label>
             <input
               value={filename}
               onInput={(e) => setFilename((e.target as HTMLInputElement).value)}
-              placeholder="movie.mp4"
+              placeholder={t("dl.filenamePlaceholder")}
               class="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-surface-100 focus:outline-none focus:border-blue-500"
             />
           </div>
           <div>
-            <label class="block text-sm text-surface-300 mb-1">Type</label>
+            <label class="block text-sm text-surface-300 mb-1">{t("dl.typeLabel")}</label>
             <select
               value={type}
               onChange={(e) => setType((e.target as HTMLSelectElement).value)}
@@ -180,13 +176,13 @@ export function DownloadList({ onNavigate }: { onNavigate: (p: string) => void }
             </select>
           </div>
           <div class="flex justify-end gap-2 pt-2">
-            <button onClick={() => setShowCreate(false)} class="px-4 py-2 text-sm text-surface-300 hover:text-surface-100">Cancel</button>
+            <button onClick={() => setShowCreate(false)} class="px-4 py-2 text-sm text-surface-300 hover:text-surface-100">{t("dl.cancelBtn")}</button>
             <button
               onClick={handleCreate}
               disabled={creating || !url.trim()}
               class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              {creating ? "Creating..." : "Create"}
+              {creating ? t("dl.creating") : t("dl.create")}
             </button>
           </div>
         </div>

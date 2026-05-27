@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { api } from "../../api/client";
 import { addToast } from "../../state";
+import { t } from "../../i18n";
 
 interface VideoFile {
   name: string;
@@ -46,7 +47,7 @@ export function Files() {
       const res = await api.listFiles();
       setFiles(res.files);
     } catch (e: any) {
-      addToast("error", `Failed to load files: ${e.message}`);
+      addToast("error", `${t("common.error")}: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -55,23 +56,20 @@ export function Files() {
   useEffect(() => { loadFiles(); }, []);
 
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setPlaying(null);
-    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setPlaying(null); }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const filtered = files.filter((f) =>
-    f.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = files.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
+  const countText = t("files.count", { count: files.length, plural: files.length !== 1 ? "s" : "" });
 
   return (
-    <div class="space-y-4">
+    <div class="space-y-4 animate-fade-in">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="text-xl font-bold text-surface-100">Video Files</h2>
-          <p class="text-sm text-surface-500 mt-0.5">{files.length} video{files.length !== 1 ? "s" : ""} in storage</p>
+          <h2 class="text-xl font-bold text-surface-100">{t("files.title")}</h2>
+          <p class="text-sm text-surface-500 mt-0.5">{countText}</p>
         </div>
         <div class="flex items-center gap-3">
           <div class="relative">
@@ -79,14 +77,14 @@ export function Files() {
             <input
               value={search}
               onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
-              placeholder="Search files..."
+              placeholder={t("files.search")}
               class="w-64 bg-surface-800/80 border border-surface-700/50 rounded-lg pl-9 pr-3 py-2 text-sm text-surface-100 placeholder:text-surface-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
             />
           </div>
           <button
             onClick={loadFiles}
             class="p-2 bg-surface-800/80 hover:bg-surface-700 border border-surface-700/50 rounded-lg text-surface-400 hover:text-surface-200 transition-all"
-            title="Refresh"
+            title={t("files.refresh")}
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
           </button>
@@ -102,8 +100,8 @@ export function Files() {
           <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-surface-800/50 flex items-center justify-center">
             <svg class="w-8 h-8 text-surface-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
           </div>
-          <p class="text-surface-400 text-sm">{search ? "No files match your search" : "No video files found"}</p>
-          <p class="text-surface-600 text-xs mt-1">Download or upload videos to see them here</p>
+          <p class="text-surface-400 text-sm">{search ? t("files.noMatch") : t("files.noFiles")}</p>
+          <p class="text-surface-600 text-xs mt-1">{t("files.noFilesHint")}</p>
         </div>
       ) : (
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -160,7 +158,7 @@ export function Files() {
               autoplay
               class="w-full rounded-xl bg-black max-h-[80vh]"
             >
-              Your browser does not support the video tag.
+              {t("common.error")}
             </video>
           </div>
         </div>

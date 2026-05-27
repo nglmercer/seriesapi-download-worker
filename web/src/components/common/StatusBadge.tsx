@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+
 const STATUS_STYLES: Record<string, { bg: string; dot: string; text: string }> = {
   pending:      { bg: "bg-yellow-500/10 border-yellow-500/20", dot: "bg-yellow-400", text: "text-yellow-300" },
   downloading:  { bg: "bg-blue-500/10 border-blue-500/20",    dot: "bg-blue-400",   text: "text-blue-300" },
@@ -21,7 +23,7 @@ export function StatusBadge({ status, class: cls = "" }: Props) {
   return (
     <span class={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-full border ${style.bg} ${style.text} ${cls}`}>
       <span class={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
-      {status}
+      {t(`status.${status}`, {}, status)}
     </span>
   );
 }

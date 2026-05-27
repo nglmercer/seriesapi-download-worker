@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 interface Props {
   current: string;
   onNavigate: (page: string) => void;
@@ -6,7 +8,7 @@ interface Props {
 const NAV_ITEMS = [
   {
     id: "dashboard",
-    label: "Dashboard",
+    labelKey: "nav.dashboard" as const,
     icon: (
       <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
@@ -15,7 +17,7 @@ const NAV_ITEMS = [
   },
   {
     id: "downloads",
-    label: "Downloads",
+    labelKey: "nav.downloads" as const,
     icon: (
       <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
@@ -24,7 +26,7 @@ const NAV_ITEMS = [
   },
   {
     id: "queue",
-    label: "Queue",
+    labelKey: "nav.queue" as const,
     icon: (
       <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
@@ -33,7 +35,7 @@ const NAV_ITEMS = [
   },
   {
     id: "files",
-    label: "Videos",
+    labelKey: "nav.videos" as const,
     icon: (
       <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
@@ -55,7 +57,7 @@ export function Sidebar({ current, onNavigate }: Props) {
           </div>
           <div>
             <h1 class="text-sm font-bold text-surface-100 tracking-tight">SeriesAPI</h1>
-            <p class="text-[10px] text-surface-500 font-medium tracking-widest uppercase">Worker</p>
+            <p class="text-[10px] text-surface-500 font-medium tracking-widest uppercase">{t("brand.worker")}</p>
           </div>
         </div>
       </div>
@@ -73,7 +75,7 @@ export function Sidebar({ current, onNavigate }: Props) {
               }`}
             >
               <span class={active ? "text-blue-400" : "text-surface-500"}>{item.icon}</span>
-              {item.label}
+              {t(item.labelKey)}
             </button>
           );
         })}
@@ -93,7 +95,7 @@ export function Sidebar({ current, onNavigate }: Props) {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
             </svg>
           </span>
-          Settings
+          {t("nav.settings")}
         </button>
       </div>
     </aside>

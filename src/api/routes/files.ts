@@ -1,5 +1,5 @@
 import { join, extname } from "path";
-import { readdirSync, statSync } from "fs";
+import { readdirSync, statSync, existsSync } from "fs";
 import type { FileService } from "../../services/file.service";
 
 interface RouteResult {
@@ -75,6 +75,46 @@ export async function handleFilesRoute(
         "Accept-Ranges": "bytes",
       },
     });
+  }
+
+  // Upload video file
+  if (method === "POST" && path === "/api/v1/files/upload") {
+    try {
+      const formData = await req.formData();
+      const file = formData.get("file") as File | null;
+      if (!file) {
+        return { status: 400, data: { error: "No file provided" } };
+      }
+
+      const ext = extname(file.name).toLowerCase();
+      if (!VIDEO_EXTENSIONS.has(ext)) {
+        return { status: 400, data: { error: `Unsupported file type: ${ext}. Allowed: ${[...VIDEO_EXTENSIONS].join(", ")}` } };
+      }
+
+      const uploadsDir = fileService.getUploadsDir();
+      fileService.ensureDir(uploadsDir);
+
+      // Sanitize filename: strip path components, prefix with timestamp
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const destFilename = `${Date.now()}-${safeName}`;
+      const destPath = join(uploadsDir, destFilename);
+
+      await Bun.write(destPath, file);
+
+      const stats = statSync(destPath);
+      return {
+        status: 200,
+        data: {
+          success: true,
+          filename: destFilename,
+          original_name: file.name,
+          path: destFilename,
+          size: stats.size,
+        },
+      };
+    } catch (e: any) {
+      return { status: 500, data: { error: `Upload failed: ${e.message}` } };
+    }
   }
 
   return null;

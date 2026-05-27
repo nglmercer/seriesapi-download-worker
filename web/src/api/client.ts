@@ -250,4 +250,23 @@ export const api = {
     const cfg = getConfig();
     return `${cfg.baseUrl}/api/v1/files/serve/${path}`;
   },
+
+  uploadFile(file: File): Promise<{ success: boolean; filename: string; original_name: string; path: string; size: number }> {
+    const cfg = getConfig();
+    const url = `${cfg.baseUrl}/api/v1/files/upload`;
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        "X-User-Id": String(cfg.userId),
+      },
+      body: formData,
+    }).then(async (res) => {
+      const data: any = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      return data;
+    });
+  },
 };

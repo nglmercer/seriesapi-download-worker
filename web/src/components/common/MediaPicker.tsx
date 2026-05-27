@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { createPortal } from "preact/compat";
 import { api } from "../../api/client";
 import { t } from "../../i18n";
 
@@ -46,7 +47,7 @@ export function MediaPicker({ open, onSelect, onClose }: Props) {
 
   const filtered = files.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
 
-  return (
+  return createPortal(
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
         <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/80 shrink-0">
@@ -101,6 +102,7 @@ export function MediaPicker({ open, onSelect, onClose }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

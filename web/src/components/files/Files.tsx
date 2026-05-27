@@ -39,7 +39,10 @@ export function Files() {
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<VideoFile | null>(null);
   const [search, setSearch] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function loadFiles() {
     setLoading(true);
@@ -51,6 +54,46 @@ export function Files() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleUpload(file: File) {
+    setUploading(true);
+    try {
+      await api.uploadFile(file);
+      addToast("success", t("files.uploadSuccess"));
+      await loadFiles();
+    } catch (e: any) {
+      addToast("error", `${t("files.uploadError")}: ${e.message}`);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleFileInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (input.files?.length) {
+      handleUpload(input.files[0]);
+      input.value = "";
+    }
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file && file.type.startsWith("video/")) {
+      handleUpload(file);
+    }
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    setDragOver(true);
+  }
+
+  function handleDragLeave(e: DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
   }
 
   useEffect(() => { loadFiles(); }, []);
@@ -72,6 +115,25 @@ export function Files() {
           <p class="text-sm text-surface-500 mt-0.5">{countText}</p>
         </div>
         <div class="flex items-center gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            class="hidden"
+            onChange={handleFileInput}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+          >
+            {uploading ? (
+              <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : (
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            )}
+            {uploading ? t("files.uploading") : t("files.upload")}
+          </button>
           <div class="relative">
             <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             <input
@@ -96,12 +158,30 @@ export function Files() {
           <div class="w-8 h-8 border-2 border-surface-600 border-t-blue-500 rounded-full animate-spin" />
         </div>
       ) : filtered.length === 0 ? (
-        <div class="bg-surface-900/50 border border-surface-800/50 rounded-2xl py-20 text-center">
+        <div
+          class={`bg-surface-900/50 border-2 border-dashed rounded-2xl py-20 text-center transition-colors ${
+            dragOver ? "border-blue-500/50 bg-blue-500/5" : "border-surface-800/50"
+          }`}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
           <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-surface-800/50 flex items-center justify-center">
             <svg class="w-8 h-8 text-surface-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
           </div>
           <p class="text-surface-400 text-sm">{search ? t("files.noMatch") : t("files.noFiles")}</p>
-          <p class="text-surface-600 text-xs mt-1">{t("files.noFilesHint")}</p>
+          {!search && (
+            <>
+              <p class="text-surface-500 text-xs mt-1">{t("files.dropHint")}</p>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                class="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors inline-flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                {t("files.dropOrClick")}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

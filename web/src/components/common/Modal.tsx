@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import { createPortal } from "preact/compat";
 import { useEffect, useRef } from "preact/hooks";
 
 interface Props {
@@ -19,12 +20,12 @@ export function Modal({ open, onClose, title, children, class: cls = "" }: Props
     if (!open && el.open) el.close();
   }, [open]);
 
-  return (
+  return createPortal(
     <dialog
       ref={ref}
       onClose={onClose}
       onClick={(e) => { if (e.target === ref.current) onClose(); }}
-      class="bg-transparent backdrop:bg-black/60 backdrop:backdrop-blur-sm max-w-lg w-full rounded-2xl p-0"
+      class="bg-transparent backdrop:bg-black/60 backdrop:backdrop-blur-sm max-w-lg w-full rounded-2xl p-0 m-auto"
     >
       <div class={`bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl shadow-black/40 ${cls}`}>
         {title && (
@@ -37,6 +38,7 @@ export function Modal({ open, onClose, title, children, class: cls = "" }: Props
         )}
         <div class="p-6">{children}</div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body
   );
 }

@@ -1,6 +1,7 @@
 import { join, basename } from "path";
 import { existsSync, readdirSync } from "fs";
-import { getDb, drizzle as globalDrizzle } from "./compat";
+import { getDb, getRawDb, drizzle as globalDrizzle } from "./compat";
+import { eq, and } from "drizzle-orm";
 import {
   mediaTaskTracksTable,
   mediaCustomSubtitlesTable,
@@ -18,9 +19,8 @@ import type { MediaTask, MediaTrack, Logger } from "./types";
 
 export async function processExternalTracks(taskId: number, logger: Logger) {
   const db = getDb();
-  const task = db
-    .query("SELECT * FROM media_tasks WHERE id = ?")
-    .get([taskId]) as MediaTask | undefined;
+  const rawDb = getRawDb();
+  const task = rawDb.query("SELECT * FROM media_tasks WHERE id = ?").get(taskId) as MediaTask | undefined;
   if (!task) {
     logger.error(`Task ${taskId} not found`);
     return;
@@ -34,9 +34,11 @@ export async function processExternalTracks(taskId: number, logger: Logger) {
     return;
   }
 
-  const tracks = globalDrizzle
-    .select(mediaTaskTracksTable)
-    .where("task_id = ? AND action != 'remove'", [taskId])
+  const tracks = db.select().from(mediaTaskTracksTable)
+    .where(and(
+      eq(mediaTaskTracksTable.task_id, taskId),
+      eq(mediaTaskTracksTable.action, "add"),
+    ))
     .all() as MediaTrack[];
 
   if (tracks.length === 0) {
@@ -55,10 +57,7 @@ export async function processExternalTracks(taskId: number, logger: Logger) {
 
     if (track.url.startsWith("file:")) {
       const fileId = parseInt(track.url.replace("file:", ""), 10);
-      const fileRecord = globalDrizzle
-        .select(filesTable)
-        .where("id = ?", [fileId])
-        .get() as { filename: string; metadata?: string } | undefined;
+      const fileRecord = db.select().from(filesTable).where(eq(filesTable.id, fileId)).get() as { filename: string; metadata?: string } | undefined;
       if (fileRecord) {
         sourcePath = FileService.getFilePath(fileRecord.filename);
 
@@ -78,15 +77,13 @@ export async function processExternalTracks(taskId: number, logger: Logger) {
       const urlFilename = track.url.split("/").pop();
 
       if (track.is_external === 1 && urlFilename) {
-        let fileRecord = globalDrizzle
-          .select(filesTable)
-          .where("filename = ?", [urlFilename])
+        let fileRecord = db.select().from(filesTable)
+          .where(eq(filesTable.filename, urlFilename))
           .get() as { filename: string; metadata?: string } | undefined;
 
         if (!fileRecord) {
-          fileRecord = globalDrizzle
-            .select(filesTable)
-            .where("original_name = ?", [urlFilename])
+          fileRecord = db.select().from(filesTable)
+            .where(eq(filesTable.original_name, urlFilename))
             .get() as { filename: string; metadata?: string } | undefined;
         }
 
@@ -144,44 +141,30 @@ export async function processExternalTracks(taskId: number, logger: Logger) {
     ) {
       const content = FileService.readFile(sourcePath) || "";
       if (content.trim().length > 0) {
-        const existing = globalDrizzle
-          .select(mediaCustomSubtitlesTable)
-          .where("track_id = ?", [track.id])
+        const existing = db.select().from(mediaCustomSubtitlesTable)
+          .where(eq(mediaCustomSubtitlesTable.track_id, track.id))
           .get();
         if (existing) {
-          globalDrizzle
-            .update(mediaCustomSubtitlesTable)
-            .set({
-              content,
-              lang: track.lang || "und",
-              label: track.label || "",
-              format: actualFormat,
-            })
-            .where("id = ?", [existing.id])
-            .run();
-          logger.info(
-            `Task ${taskId}: Updated custom subtitle track ${track.id} (${actualFormat})`,
-          );
+          db.update(mediaCustomSubtitlesTable).set({
+            content,
+            lang: track.lang || "und",
+            label: track.label || "",
+            format: actualFormat,
+          }).where(eq(mediaCustomSubtitlesTable.id, existing.id)).run();
+          logger.info(`Task ${taskId}: Updated custom subtitle track ${track.id} (${actualFormat})`);
         } else {
-          globalDrizzle
-            .insert(mediaCustomSubtitlesTable)
-            .values({
-              task_id: taskId,
-              track_id: track.id,
-              format: actualFormat,
-              content,
-              lang: track.lang || "und",
-              label: track.label || "",
-            })
-            .run();
-          logger.info(
-            `Task ${taskId}: Registered custom subtitle track ${track.id} (${actualFormat})`,
-          );
+          db.insert(mediaCustomSubtitlesTable).values({
+            task_id: taskId,
+            track_id: track.id,
+            format: actualFormat,
+            content,
+            lang: track.lang || "und",
+            label: track.label || "",
+          }).run();
+          logger.info(`Task ${taskId}: Registered custom subtitle track ${track.id} (${actualFormat})`);
         }
       } else {
-        logger.warn(
-          `Task ${taskId}: Custom subtitle track ${track.id} has empty content, skipping`,
-        );
+        logger.warn(`Task ${taskId}: Custom subtitle track ${track.id} has empty content, skipping`);
       }
       customTrackIds.add(track.id);
       continue;
@@ -234,19 +217,13 @@ export async function processExternalTracks(taskId: number, logger: Logger) {
       const destPath = join(tracksDir, destFilename);
       const success = FileService.copyPhysicalFile(sourcePath, destPath);
       if (success) {
-        logger.info(
-          `Task ${taskId}: Copied ${track.track_type} track to ${destFilename}`,
-        );
+        logger.info(`Task ${taskId}: Copied ${track.track_type} track to ${destFilename}`);
         finalDestPath = destPath;
       } else {
-        logger.warn(
-          `Task ${taskId}: Failed to copy ${track.track_type} track to ${destFilename}`,
-        );
+        logger.warn(`Task ${taskId}: Failed to copy ${track.track_type} track to ${destFilename}`);
       }
     } else if (track.track_type === "subtitle" && subtitlePlaylistName) {
-      logger.warn(
-        `Task ${taskId}: Source file not found for subtitle track, creating placeholder playlist`,
-      );
+      logger.warn(`Task ${taskId}: Source file not found for subtitle track, creating placeholder playlist`);
       const subPlaylistContent = buildSubtitlePlaylist("");
       const subPlaylistPath = join(outputDir, subtitlePlaylistName);
       await HlsS3Storage.writeFile(subPlaylistPath, subPlaylistContent);
@@ -258,15 +235,11 @@ export async function processExternalTracks(taskId: number, logger: Logger) {
       );
       const subPlaylistPath = join(outputDir, subtitlePlaylistName);
       await HlsS3Storage.writeFile(subPlaylistPath, subPlaylistContent);
-      logger.info(
-        `Task ${taskId}: Created subtitle playlist ${subtitlePlaylistName}`,
-      );
+      logger.info(`Task ${taskId}: Created subtitle playlist ${subtitlePlaylistName}`);
     }
 
     if (!finalDestPath && !subtitlePlaylistName) {
-      logger.warn(
-        `Task ${taskId}: Source file not found for track: ${track.url}`,
-      );
+      logger.warn(`Task ${taskId}: Source file not found for track: ${track.url}`);
     }
   }
 

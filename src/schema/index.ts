@@ -5,6 +5,8 @@ export {
   mediaHlsOutputsTable,
   mediaHlsResourcesTable,
   mediaCustomSubtitlesTable,
+  mediaTable,
+  imagesTable,
   QUALITY_PRESETS,
   QUALITY_CONFIGS,
   DEFAULT_OUTPUT_PROFILES,
@@ -14,12 +16,17 @@ export { filesTable, userQuotasTable } from "./files";
 
 import { downloadTasksTable } from "./downloads";
 import {
-  mediaTasksTable, mediaTaskTracksTable, mediaHlsOutputsTable,
-  mediaHlsResourcesTable, mediaCustomSubtitlesTable,
+  mediaTasksTable,
+  mediaTaskTracksTable,
+  mediaHlsOutputsTable,
+  mediaHlsResourcesTable,
+  mediaCustomSubtitlesTable,
+  mediaTable,
+  imagesTable,
 } from "./queue";
 import { filesTable, userQuotasTable } from "./files";
 
-export const ALL_TABLES = [
+export const ALL_TABLES = {
   downloadTasksTable,
   mediaTasksTable,
   mediaTaskTracksTable,
@@ -28,4 +35,6 @@ export const ALL_TABLES = [
   mediaCustomSubtitlesTable,
   filesTable,
   userQuotasTable,
-];
+  mediaTable,
+  imagesTable,
+};

@@ -1,7 +1,8 @@
 import { FFmpegCommand } from "ffmpeg-lib";
 import { join } from "path";
+import { eq, like, and } from "drizzle-orm";
+import { getDb, runRaw } from "./compat";
 import { FileService } from "../file.service";
-import { drizzle as globalDrizzle } from "./compat";
 import { mediaTaskTracksTable, mediaCustomSubtitlesTable } from "../../schema/queue";
 import type { SubtitleStream, Logger } from "./types";
 
@@ -13,6 +14,7 @@ export async function extractSubtitlesToVTT(
   ffprobePath: string,
   logger: Logger,
 ) {
+  const db = getDb();
   const extractDir = FileService.getTaskExtractDir(taskId);
   for (const sub of subtitleStreams) {
     const index = sub.index;
@@ -28,10 +30,11 @@ export async function extractSubtitlesToVTT(
     const originalPath = join(extractDir, originalFilename);
 
     try {
-      const existingTrack = globalDrizzle
-        .select(mediaTaskTracksTable)
-        .where("task_id = ? AND url LIKE ?", [taskId, `%${originalFilename}`])
-        .get();
+      const existingTrack = db.select().from(mediaTaskTracksTable)
+        .where(and(
+          eq(mediaTaskTracksTable.task_id, taskId),
+          like(mediaTaskTracksTable.url, `%${originalFilename}%`),
+        )).get();
 
       if (existingTrack) {
         logger.info(
@@ -60,7 +63,7 @@ export async function extractSubtitlesToVTT(
         continue;
       }
 
-      FileService.registerExistingFile(globalDrizzle, originalPath, {
+      FileService.registerExistingFile(db, originalPath, {
         original_name: `${label}.${ext}`,
         category: "subtitle",
         metadata: { original_codec: codec, format: ext, task_id: taskId },
@@ -89,7 +92,7 @@ export async function extractSubtitlesToVTT(
             rawVtt.trim().length > 0 &&
             rawVtt.trim() !== "WEBVTT"
           ) {
-            FileService.registerExistingFile(globalDrizzle, vttFfmpegPath, {
+            FileService.registerExistingFile(db, vttFfmpegPath, {
               original_name: `${label}_ffmpeg.vtt`,
               category: "subtitle",
               metadata: {
@@ -110,35 +113,28 @@ export async function extractSubtitlesToVTT(
         }
       }
 
-      const trackResult = globalDrizzle
-        .insert(mediaTaskTracksTable)
-        .values({
-          task_id: taskId,
-          track_type: "subtitle",
-          url: finalUrl,
-          label,
-          lang,
-          is_external: 0,
-          action: "add",
-          metadata: JSON.stringify({
-            original_codec: codec,
-            original_ext: ext,
-          }),
-        })
-        .run();
+      const trackResult = runRaw(
+        `INSERT INTO media_task_tracks (task_id, track_type, url, label, lang, is_external, action, metadata)
+         VALUES (?, ?, ?, ?, ?, 0, 'add', ?)`,
+        taskId,
+        "subtitle",
+        finalUrl,
+        label,
+        lang,
+        JSON.stringify({ original_codec: codec, original_ext: ext }),
+      );
 
       if (ext !== "vtt" && rawContent && rawContent.trim().length > 0) {
-        globalDrizzle
-          .insert(mediaCustomSubtitlesTable)
-          .values({
-            task_id: taskId,
-            track_id: trackResult.lastInsertRowid as number,
-            format: ext,
-            content: rawContent,
-            lang,
-            label,
-          })
-          .run();
+        runRaw(
+          `INSERT INTO media_custom_subtitles (task_id, track_id, format, content, lang, label)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          taskId,
+          Number(trackResult.lastInsertRowid),
+          ext,
+          rawContent,
+          lang,
+          label,
+        );
         logger.info(
           `Task ${taskId}: Registered custom subtitle ${index} (${ext}) for API serving`,
         );

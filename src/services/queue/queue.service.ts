@@ -1,13 +1,17 @@
+import { eq, and, desc, asc, sql, count } from "drizzle-orm";
+import { Database } from "bun:sqlite";
+import type { DrizzleDb } from "../../db/index";
+import { runRaw } from "../transcoding/compat";
 import {
   mediaTasksTable,
   mediaTaskTracksTable,
   mediaHlsOutputsTable,
+  mediaTable,
+  imagesTable,
   QUALITY_PRESETS,
   QUALITY_CONFIGS,
 } from "../../schema/queue";
-import { mediaTable } from "../../schema/queue";
 import { filesTable } from "../../schema/files";
-import { imagesTable } from "../../schema/queue";
 import { FFmpegCommand, type ProbeData } from "ffmpeg-lib";
 import { getFFmpegPaths } from "../transcoding/ffmpeg-instance";
 import { hlsResourceService } from "../transcoding/hls-service";
@@ -17,8 +21,6 @@ import { TranscodingService } from "../transcoding/transcoder";
 import { M3U8Parser } from "../transcoding/m3u8-parser";
 import { join } from "path";
 import { existsSync, statSync, readdirSync } from "fs";
-import type { SqliteNapiAdapter } from "../../core/index";
-import type { Database } from "sqlite-napi";
 
 export interface TaskListResult {
   rows: Record<string, unknown>[];
@@ -46,56 +48,46 @@ export interface ProbeResult {
 
 export class QueueService {
   static list(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
+    rawDb: Database,
     page: number,
     limit: number,
     offset: number,
     filters: { media_id?: number; season_id?: number; episode_id?: number } = {},
   ): TaskListResult {
-    const whereConditions: string[] = [];
-    const whereParams: unknown[] = [];
+    const conditions = [];
+    if (filters.media_id != null) conditions.push(eq(mediaTasksTable.media_id, filters.media_id));
+    if (filters.season_id != null) conditions.push(eq(mediaTasksTable.season_id, filters.season_id));
+    if (filters.episode_id != null) conditions.push(eq(mediaTasksTable.episode_id, filters.episode_id));
 
-    if (filters.media_id != null) {
-      whereConditions.push("media_id = ?");
-      whereParams.push(filters.media_id);
-    }
-    if (filters.season_id != null) {
-      whereConditions.push("season_id = ?");
-      whereParams.push(filters.season_id);
-    }
-    if (filters.episode_id != null) {
-      whereConditions.push("episode_id = ?");
-      whereParams.push(filters.episode_id);
-    }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const rows = drizzle.all(mediaTasksTable, {
-      where: whereConditions.length > 0 ? whereConditions.join(" AND ") : undefined,
-      params: whereParams,
-      orderBy: "created_at desc",
-      limit: limit,
-      offset: offset ?? 0
-    });
+    const rows = db.select().from(mediaTasksTable)
+      .where(whereClause)
+      .orderBy(desc(mediaTasksTable.created_at))
+      .limit(limit)
+      .offset(offset)
+      .all();
 
-    const taskIds = rows.map((t: Record<string, unknown>) => t.id as number);
+    const taskIds = rows.map((t) => t.id as number);
 
     const allTracks =
       taskIds.length > 0
-        ? drizzle.all(mediaTaskTracksTable, {
-            where: `task_id IN (${taskIds.join(",")})`
-          })
+        ? db.select().from(mediaTaskTracksTable)
+            .where(sql`${mediaTaskTracksTable.task_id} IN (${sql.join(taskIds.map(id => sql`${id}`), sql`, `)})`)
+            .all()
         : [];
 
     const tracksByTask = new Map<number, typeof allTracks>();
     for (const track of allTracks) {
-      const trackRecord = track as Record<string, unknown>;
-      const taskId = trackRecord.task_id as number;
+      const taskId = track.task_id as number;
       if (!tracksByTask.has(taskId)) {
         tracksByTask.set(taskId, []);
       }
       tracksByTask.get(taskId)!.push(track);
     }
 
-    const processedRows = rows.map((t: Record<string, unknown>) => {
+    const processedRows = rows.map((t) => {
       let info = t.source_video_info;
       let quals = t.qualities;
       try {
@@ -119,34 +111,31 @@ export class QueueService {
       };
     });
 
-    const total = drizzle.count(mediaTasksTable, {
-      where: whereConditions.length > 0 ? whereConditions.join(" AND ") : undefined,
-      params: whereParams
-    });
+    const totalResult = db.select({ count: count() }).from(mediaTasksTable).where(whereClause).get();
+    const total = totalResult?.count ?? 0;
 
     return { rows: processedRows, total, page, limit };
   }
 
   static get(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): Record<string, unknown> | null {
-    const task = drizzle.get(mediaTasksTable, { where: "id = ?", params: [id] });
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return null;
 
-    const tracks = drizzle.all(mediaTaskTracksTable, { where: "task_id = ?", params: [id] });
-    const outputs = drizzle.all(mediaHlsOutputsTable, { where: "task_id = ?", params: [id] });
+    const tracks = db.select().from(mediaTaskTracksTable).where(eq(mediaTaskTracksTable.task_id, id)).all();
+    const outputs = db.select().from(mediaHlsOutputsTable).where(eq(mediaHlsOutputsTable.task_id, id)).all();
 
-    const taskRecord = task as Record<string, unknown>;
     const entity_type =
-      taskRecord.episode_id != null
+      task.episode_id != null
         ? "episode"
-        : taskRecord.season_id != null
+        : task.season_id != null
           ? "season"
           : "media";
 
-    let info = taskRecord.source_video_info;
-    let quals = taskRecord.qualities;
+    let info = task.source_video_info;
+    let quals = task.qualities;
     try {
       if (typeof info === "string") info = JSON.parse(info);
     } catch {}
@@ -155,7 +144,7 @@ export class QueueService {
     } catch {}
 
     return {
-      ...taskRecord,
+      ...task,
       source_video_info: info,
       qualities: quals,
       entity_type,
@@ -165,7 +154,7 @@ export class QueueService {
   }
 
   static create(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     data: {
       title: string;
       description?: string;
@@ -177,19 +166,15 @@ export class QueueService {
     },
   ): Record<string, unknown> | { error: string } {
     if (data.media_id !== undefined) {
-      const media = drizzle.get(mediaTable, {
-        select: "id",
-        where: "id = ?",
-        params: [data.media_id]
-      });
+      const media = db.select().from(mediaTable).where(eq(mediaTable.id, data.media_id)).get();
       if (!media) return { error: `media_id ${data.media_id} not found` };
     }
 
     const resolvedUrl = FileService.resolveRelativeFromStorage(
-      FileService.resolveInternalUrl(drizzle, data.source_video_url),
+      FileService.resolveInternalUrl(db, data.source_video_url),
     );
 
-    const result = drizzle
+    const inserted = db
       .insert(mediaTasksTable)
       .values({
         title: data.title,
@@ -201,23 +186,21 @@ export class QueueService {
         thumbnail_url: data.thumbnail_url ?? undefined,
         status: "pending",
       })
-      .run();
+      .returning()
+      .get()!;
 
-    return this.get(drizzle, Number(result.lastInsertRowid))!;
+    return this.get(db, inserted.id)!;
   }
 
   static async probe(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): Promise<Record<string, unknown> | { error: string }> {
-    const task = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [id]
-    }) as Record<string, unknown> | undefined;
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     const resolvedPath = FileService.resolveInternalUrl(
-      drizzle,
+      db,
       task.source_video_url as string,
     );
     const absolutePath = FileService.resolveUploadsPath(resolvedPath);
@@ -226,11 +209,8 @@ export class QueueService {
       return { error: `Source file not found: ${absolutePath}` };
     }
 
-    drizzle
-      .update(mediaTasksTable)
-      .set({ status: "probing", updated_at: new Date().toISOString() })
-      .where("id = ?", [id])
-      .run();
+    db.update(mediaTasksTable).set({ status: "probing", updated_at: new Date().toISOString() })
+      .where(eq(mediaTasksTable.id, id)).run();
 
     try {
       const { ffmpegPath, ffprobePath } = await getFFmpegPaths();
@@ -270,35 +250,27 @@ export class QueueService {
       if (h >= 360) suggestions.push("360p");
       if (suggestions.length === 0) suggestions.push("original");
 
-      drizzle
-        .update(mediaTasksTable)
-        .set({
-          status: "ready",
-          source_video_info: JSON.stringify(info),
-          qualities: JSON.stringify(suggestions),
-          updated_at: new Date().toISOString(),
-        })
-        .where("id = ?", [id])
-        .run();
+      db.update(mediaTasksTable).set({
+        status: "ready",
+        source_video_info: JSON.stringify(info),
+        qualities: JSON.stringify(suggestions),
+        updated_at: new Date().toISOString(),
+      }).where(eq(mediaTasksTable.id, id)).run();
 
-      return this.get(drizzle, id)!;
+      return this.get(db, id)!;
     } catch (err: unknown) {
       const errMessage = err instanceof Error ? err.message : String(err);
-      drizzle
-        .update(mediaTasksTable)
-        .set({
-          status: "failed",
-          error_message: errMessage,
-          updated_at: new Date().toISOString(),
-        })
-        .where("id = ?", [id])
-        .run();
+      db.update(mediaTasksTable).set({
+        status: "failed",
+        error_message: errMessage,
+        updated_at: new Date().toISOString(),
+      }).where(eq(mediaTasksTable.id, id)).run();
       return { error: `Probe failed: ${errMessage}` };
     }
   }
 
   static update(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
     data: {
       title?: string;
@@ -311,21 +283,19 @@ export class QueueService {
       episode_id?: number;
     },
   ): Record<string, unknown> | { error: string } {
-    const updateData: Record<string, string | string[] | Date | number | null> =
-      {};
+    const updateData: Record<string, unknown> = {};
     if (data.title) updateData.title = data.title;
-    if (data.description !== undefined)
-      updateData.description = data.description;
+    if (data.description !== undefined) updateData.description = data.description;
     if (data.qualities) updateData.qualities = JSON.stringify(data.qualities);
     if (data.source_video_url) {
       updateData.source_video_url = FileService.resolveRelativeFromStorage(
-        FileService.resolveInternalUrl(drizzle, data.source_video_url),
+        FileService.resolveInternalUrl(db, data.source_video_url),
       );
     }
     if (data.thumbnail_url !== undefined) {
       updateData.thumbnail_url = data.thumbnail_url
         ? FileService.resolveRelativeFromStorage(
-            FileService.resolveInternalUrl(drizzle, data.thumbnail_url),
+            FileService.resolveInternalUrl(db, data.thumbnail_url),
           )
         : null;
     }
@@ -334,34 +304,24 @@ export class QueueService {
     if (data.episode_id !== undefined) updateData.episode_id = data.episode_id;
     updateData.updated_at = new Date().toISOString();
 
-    const result = drizzle
-      .update(mediaTasksTable)
-      .set(updateData)
-      .where("id = ?", [id])
-      .run();
+    const updated = db.update(mediaTasksTable).set(updateData).where(eq(mediaTasksTable.id, id)).returning().get();
 
-    if (result.changes === 0) return { error: "Task not found" };
-    return this.get(drizzle, id)!;
+    if (!updated) return { error: "Task not found" };
+    return this.get(db, id)!;
   }
 
   static start(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
     userId: number | null,
   ): { error: string } | { success: true } {
-    const task = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [id]
-    }) as Record<string, unknown> | undefined;
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     if (task.status === "processing") return { error: "Already processing" };
 
-    drizzle
-      .update(mediaTasksTable)
-      .set({ status: "processing", updated_at: new Date().toISOString() })
-      .where("id = ?", [id])
-      .run();
+    db.update(mediaTasksTable).set({ status: "processing", updated_at: new Date().toISOString() })
+      .where(eq(mediaTasksTable.id, id)).run();
 
     TranscodingService.process(id, userId, true).catch((err) => {
       console.error(`Task ${id} startup failed:`, err);
@@ -370,25 +330,19 @@ export class QueueService {
     return { success: true };
   }
 
-  static stop(drizzle: SqliteNapiAdapter, id: number): { success: true } {
-    drizzle
-      .update(mediaTasksTable)
-      .set({ status: "stopped", updated_at: new Date().toISOString() })
-      .where("id = ?", [id])
-      .run();
+  static stop(db: DrizzleDb, id: number): { success: true } {
+    db.update(mediaTasksTable).set({ status: "stopped", updated_at: new Date().toISOString() })
+      .where(eq(mediaTasksTable.id, id)).run();
 
     TranscodingService.abort(id);
     return { success: true };
   }
 
   static restart(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): { error: string } | { success: true; status: string; message: string } {
-    const task = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [id]
-    }) as Record<string, unknown> | undefined;
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     if (
@@ -399,15 +353,11 @@ export class QueueService {
       return { error: "Can only restart completed, failed or stopped tasks" };
     }
 
-    drizzle
-      .update(mediaTasksTable)
-      .set({
-        status: "ready",
-        progress: 0,
-        updated_at: new Date().toISOString(),
-      })
-      .where("id = ?", [id])
-      .run();
+    db.update(mediaTasksTable).set({
+      status: "ready",
+      progress: 0,
+      updated_at: new Date().toISOString(),
+    }).where(eq(mediaTasksTable.id, id)).run();
 
     return {
       success: true,
@@ -417,20 +367,20 @@ export class QueueService {
   }
 
   static delete(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): { error: string } | { success: true } {
-    drizzle.delete(mediaTaskTracksTable).where("task_id = ?", [id]).run();
-    drizzle.delete(mediaHlsOutputsTable).where("task_id = ?", [id]).run();
+    db.delete(mediaTaskTracksTable).where(eq(mediaTaskTracksTable.task_id, id)).run();
+    db.delete(mediaHlsOutputsTable).where(eq(mediaHlsOutputsTable.task_id, id)).run();
 
-    const result = drizzle.delete(mediaTasksTable).where("id = ?", [id]).run();
+    const deleted = db.delete(mediaTasksTable).where(eq(mediaTasksTable.id, id)).returning().get();
 
-    if (result.changes === 0) return { error: "Task not found" };
+    if (!deleted) return { error: "Task not found" };
     return { success: true };
   }
 
   static getOutputs(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     filters: { media_id?: string; season_id?: string; episode_id?: string },
   ) {
     if (!filters.media_id && !filters.season_id && !filters.episode_id) {
@@ -440,26 +390,14 @@ export class QueueService {
       };
     }
 
-    const whereConditions: string[] = [];
-    const whereParams: unknown[] = [];
+    const conditions = [];
+    if (filters.media_id) conditions.push(eq(mediaHlsOutputsTable.media_id, parseInt(filters.media_id, 10)));
+    if (filters.season_id) conditions.push(eq(mediaHlsOutputsTable.season_id, parseInt(filters.season_id, 10)));
+    if (filters.episode_id) conditions.push(eq(mediaHlsOutputsTable.episode_id, parseInt(filters.episode_id, 10)));
 
-    if (filters.media_id) {
-      whereConditions.push("media_id = ?");
-      whereParams.push(filters.media_id);
-    }
-    if (filters.season_id) {
-      whereConditions.push("season_id = ?");
-      whereParams.push(filters.season_id);
-    }
-    if (filters.episode_id) {
-      whereConditions.push("episode_id = ?");
-      whereParams.push(filters.episode_id);
-    }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    return drizzle.all(mediaHlsOutputsTable, {
-      where: whereConditions.length > 0 ? whereConditions.join(" AND ") : undefined,
-      params: whereParams
-    });
+    return db.select().from(mediaHlsOutputsTable).where(whereClause).all();
   }
 
   static async checkExistingOutputs(
@@ -498,43 +436,34 @@ export class QueueService {
     return { qualities, subtitles, audio };
   }
 
-  static getTaskOutputs(drizzle: SqliteNapiAdapter, id: number) {
-    return drizzle.all(mediaHlsOutputsTable, { where: "task_id = ?", params: [id] });
+  static getTaskOutputs(db: DrizzleDb, id: number) {
+    return db.select().from(mediaHlsOutputsTable).where(eq(mediaHlsOutputsTable.task_id, id)).all();
   }
 
   static getTaskOutput(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
     outputId: number,
   ): Record<string, unknown> | { error: string } {
-    const output = drizzle.get(mediaHlsOutputsTable, {
-      where: "id = ?",
-      params: [outputId]
-    }) as Record<string, unknown> | undefined;
+    const output = db.select().from(mediaHlsOutputsTable).where(eq(mediaHlsOutputsTable.id, outputId)).get();
     if (!output) return { error: "Output not found" };
-    if (output.task_id !== id)
-      return { error: "Output does not belong to this task" };
+    if (output.task_id !== id) return { error: "Output does not belong to this task" };
 
     return output;
   }
 
   static addQualityToTask(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
     quality: string,
   ):
     | { error: string }
     | { success: true; quality: string; message: string; status: string } {
-    const task = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [id]
-    }) as Record<string, unknown> | undefined;
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
-    const existingOutputs = drizzle.all(mediaHlsOutputsTable, {
-      where: "task_id = ?",
-      params: [id]
-    }) as Record<string, unknown>[];
+    const existingOutputs = db.select().from(mediaHlsOutputsTable)
+      .where(eq(mediaHlsOutputsTable.task_id, id)).all();
     const existingQualities = existingOutputs
       .map((o) => o.quality as string)
       .filter(Boolean);
@@ -548,15 +477,11 @@ export class QueueService {
       : [];
     if (!currentQualities.includes(quality)) {
       const updatedQualities = [...currentQualities, quality];
-      drizzle
-        .update(mediaTasksTable)
-        .set({
-          qualities: JSON.stringify(updatedQualities),
-          status: "ready",
-          updated_at: new Date().toISOString(),
-        })
-        .where("id = ?", [id])
-        .run();
+      db.update(mediaTasksTable).set({
+        qualities: JSON.stringify(updatedQualities),
+        status: "ready",
+        updated_at: new Date().toISOString(),
+      }).where(eq(mediaTasksTable.id, id)).run();
     }
 
     return {
@@ -568,34 +493,27 @@ export class QueueService {
   }
 
   static setQualities(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
     qualities: string[],
   ): Record<string, unknown> | { error: string } {
-    const task = drizzle.get(mediaTasksTable, { where: "id = ?", params: [id] });
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
-    drizzle
-      .update(mediaTasksTable)
-      .set({
-        qualities: JSON.stringify(qualities),
-        status: "ready",
-        updated_at: new Date().toISOString(),
-      })
-      .where("id = ?", [id])
-      .run();
+    db.update(mediaTasksTable).set({
+      qualities: JSON.stringify(qualities),
+      status: "ready",
+      updated_at: new Date().toISOString(),
+    }).where(eq(mediaTasksTable.id, id)).run();
 
-    return this.get(drizzle, id)!;
+    return this.get(db, id)!;
   }
 
   static async processTracks(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): Promise<{ error: string } | { success: true; message: string }> {
-    const task = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [id]
-    }) as Record<string, unknown> | undefined;
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     if (task.status !== "completed") {
@@ -607,22 +525,19 @@ export class QueueService {
   }
 
   static async generateThumbnail(
-    drizzle: SqliteNapiAdapter,
-    db: Database,
+    db: DrizzleDb,
+    rawDb: Database,
     id: number,
     seekParam?: string | null,
   ): Promise<
     | { error: string }
     | { id: number; url: string; seek_time: number; task_id: number }
   > {
-    const task = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [id]
-    }) as Record<string, unknown> | undefined;
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     const resolvedPath = FileService.resolveInternalUrl(
-      drizzle,
+      db,
       task.source_video_url as string,
     );
     const absolutePath = FileService.resolveUploadsPath(resolvedPath);
@@ -669,7 +584,7 @@ export class QueueService {
 
       await cmd.run();
 
-      const fileRecord = FileService.registerExistingFile(drizzle, outputPath, {
+      const fileRecord = FileService.registerExistingFile(db, outputPath, {
         original_name: `thumbnail_${id}.jpg`,
         category: "image",
         metadata: { task_id: id, seek_time: seekTime },
@@ -691,30 +606,23 @@ export class QueueService {
     }
   }
 
-  /**
-   * Get or lazily generate a thumbnail for an entity (episode, media, season).
-   *
-   * 1. Checks images table for existing still/poster
-   * 2. If not found, finds the queue task with a source video
-   * 3. Generates thumbnail via FFmpeg
-   * 4. Stores in images table
-   * 5. Returns the URL
-   */
   static async getOrGenerateThumbnail(
-    drizzle: SqliteNapiAdapter,
-    db: Database,
+    db: DrizzleDb,
+    rawDb: Database,
     entityType: "episode" | "media" | "season",
     entityId: number,
     seekParam?: string | null,
   ): Promise<
     { error: string } | { url: string; generated: boolean; file_id?: number }
   > {
-    // 1. Check for existing thumbnail in images table
     const imageType = entityType === "episode" ? "still" : "poster";
-    const existing = drizzle.get(imagesTable, {
-      where: "entity_type = ? AND entity_id = ? AND image_type = ? AND is_primary = 1",
-      params: [entityType, entityId, imageType]
-    }) as Record<string, unknown> | undefined;
+    const existing = db.select().from(imagesTable)
+      .where(and(
+        eq(imagesTable.entity_type, entityType),
+        eq(imagesTable.entity_id, entityId),
+        eq(imagesTable.image_type, imageType),
+        eq(imagesTable.is_primary, 1),
+      )).get();
 
     if (existing && existing.url) {
       return {
@@ -724,34 +632,38 @@ export class QueueService {
       };
     }
 
-    // 2. Find the queue task for this entity
-    let taskWhere: string;
-    let taskParams: unknown[];
+    let task;
     if (entityType === "episode") {
-      taskWhere = "episode_id = ? AND source_video_url IS NOT NULL";
-      taskParams = [entityId];
+      task = db.select().from(mediaTasksTable)
+        .where(and(
+          eq(mediaTasksTable.episode_id, entityId),
+          sql`${mediaTasksTable.source_video_url} IS NOT NULL`,
+        )).orderBy(desc(mediaTasksTable.id)).get();
     } else if (entityType === "season") {
-      taskWhere = "season_id = ? AND episode_id IS NULL AND source_video_url IS NOT NULL";
-      taskParams = [entityId];
+      task = db.select().from(mediaTasksTable)
+        .where(and(
+          eq(mediaTasksTable.season_id, entityId),
+          sql`${mediaTasksTable.episode_id} IS NULL`,
+          sql`${mediaTasksTable.source_video_url} IS NOT NULL`,
+        )).orderBy(desc(mediaTasksTable.id)).get();
     } else {
-      taskWhere = "media_id = ? AND season_id IS NULL AND episode_id IS NULL AND source_video_url IS NOT NULL";
-      taskParams = [entityId];
+      task = db.select().from(mediaTasksTable)
+        .where(and(
+          eq(mediaTasksTable.media_id, entityId),
+          sql`${mediaTasksTable.season_id} IS NULL`,
+          sql`${mediaTasksTable.episode_id} IS NULL`,
+          sql`${mediaTasksTable.source_video_url} IS NOT NULL`,
+        )).orderBy(desc(mediaTasksTable.id)).get();
     }
 
-    const task = drizzle.get(mediaTasksTable, {
-      where: taskWhere,
-      params: taskParams,
-      orderBy: "id DESC"
-    }) as Record<string, unknown> | undefined;
     if (!task) {
       return {
         error: `No transcoding task found for ${entityType} ${entityId}`,
       };
     }
 
-    // 3. Resolve source video path
     const resolvedPath = FileService.resolveInternalUrl(
-      drizzle,
+      db,
       task.source_video_url as string,
     );
     const absolutePath = FileService.resolveUploadsPath(resolvedPath);
@@ -760,7 +672,6 @@ export class QueueService {
       return { error: `Source video not found: ${absolutePath}` };
     }
 
-    // 4. Calculate seek time
     let duration = 0;
     try {
       const info = task.source_video_info;
@@ -782,7 +693,6 @@ export class QueueService {
       seekTime = Math.min(5, duration * 0.1);
     }
 
-    // 5. Generate thumbnail
     const taskId = task.id as number;
     const thumbDir = FileService.getThumbnailDir(taskId);
     const outputPath = FileService.resolveThumbnailPath(
@@ -801,8 +711,7 @@ export class QueueService {
 
       await cmd.run();
 
-      // 6. Register in files table
-      const fileRecord = FileService.registerExistingFile(drizzle, outputPath, {
+      const fileRecord = FileService.registerExistingFile(db, outputPath, {
         original_name: `thumbnail_${entityType}_${entityId}.jpg`,
         category: "image",
         metadata: {
@@ -820,19 +729,15 @@ export class QueueService {
       const fileId = fileRecord.id as number;
       const publicUrl = FileService.getPublicUrl(outputPath);
 
-      // 7. Store in images table
-      drizzle
-        .insert(imagesTable)
-        .values({
-          entity_type: entityType,
-          entity_id: entityId,
-          image_type: imageType,
-          url: publicUrl,
-          file_id: fileId,
-          is_primary: 1,
-          source: "auto_generated",
-        })
-        .run();
+      db.insert(imagesTable).values({
+        entity_type: entityType,
+        entity_id: entityId,
+        image_type: imageType,
+        url: publicUrl,
+        file_id: fileId,
+        is_primary: 1,
+        source: "auto_generated",
+      }).run();
 
       return { url: publicUrl, generated: true, file_id: fileId };
     } catch (err) {
@@ -848,14 +753,9 @@ export class QueueService {
     };
   }
 
-  /**
-   * Backfill metadata for a single task's HLS outputs.
-   * Parses the m3u8 files on disk and updates total_duration, segments_count,
-   * file_size, resolution, and bandwidth where they are NULL.
-   */
   static async backfillTaskOutputs(
-    drizzle: SqliteNapiAdapter,
-    db: Database,
+    db: DrizzleDb,
+    rawDb: Database,
     taskId: number,
   ): Promise<{ updated: number; errors: string[] }> {
     const outputDir = FileService.getHlsOutputDir(taskId);
@@ -868,17 +768,13 @@ export class QueueService {
       };
     }
 
-    // Get all outputs for this task
-    const outputs = drizzle
-      .select(mediaHlsOutputsTable)
-      .where("task_id = ?", [taskId])
-      .all() as Record<string, unknown>[];
+    const outputs = db.select().from(mediaHlsOutputsTable)
+      .where(eq(mediaHlsOutputsTable.task_id, taskId)).all();
 
     if (outputs.length === 0) {
       return { updated: 0, errors: [] };
     }
 
-    // Parse master to get variant info (bandwidth, resolution)
     const masterContent = await HlsS3Storage.readFile(masterPath);
     const masterParsed = masterContent
       ? M3U8Parser.parse(masterContent, masterPath)
@@ -890,7 +786,6 @@ export class QueueService {
 
     if (masterParsed?.type === "master" && masterParsed.masterInfo) {
       for (const v of masterParsed.masterInfo.variants) {
-        // uri is like "1080p/index.m3u8", extract quality
         const quality = v.uri.split("/")[0] || "";
         if (!quality) continue;
         variantMap.set(quality, {
@@ -916,7 +811,6 @@ export class QueueService {
       }
 
       try {
-        // Parse variant playlist for duration and segments
         const playlistContent = await HlsS3Storage.readFile(playlistPath);
         const parsed = playlistContent
           ? M3U8Parser.parse(playlistContent, playlistPath)
@@ -929,7 +823,6 @@ export class QueueService {
           segmentsCount = parsed.variantInfo.segments;
         }
 
-        // Calculate directory file size (local only; S3 sizes not listed)
         let fileSize = 0;
         if (existsSync(qualityDir)) {
           const files = readdirSync(qualityDir);
@@ -941,10 +834,8 @@ export class QueueService {
           }
         }
 
-        // Get bandwidth/resolution from master playlist
         const variantInfo = variantMap.get(quality);
 
-        // Build update — only set fields that are currently NULL
         const updates: string[] = [];
         const params: unknown[] = [];
 
@@ -971,9 +862,9 @@ export class QueueService {
 
         if (updates.length > 0) {
           params.push(output.id);
-          db.run(
+          runRaw(
             `UPDATE media_hls_outputs SET ${updates.join(", ")} WHERE id = ?`,
-            params,
+            ...params,
           );
           updated++;
         }
@@ -986,15 +877,11 @@ export class QueueService {
     return { updated, errors };
   }
 
-  /**
-   * Backfill metadata for ALL tasks with HLS outputs missing duration.
-   */
   static async backfillAllOutputs(
-    drizzle: SqliteNapiAdapter,
-    db: Database,
+    db: DrizzleDb,
+    rawDb: Database,
   ): Promise<{ totalOutputs: number; updated: number; errors: string[] }> {
-    // Find all unique task_ids that have outputs with NULL total_duration
-    const rows = db
+    const rows = rawDb
       .query(
         `SELECT DISTINCT task_id FROM media_hls_outputs WHERE total_duration IS NULL`,
       )
@@ -1005,7 +892,7 @@ export class QueueService {
     const allErrors: string[] = [];
 
     for (const row of rows) {
-      const result = await this.backfillTaskOutputs(drizzle, db, row.task_id);
+      const result = await this.backfillTaskOutputs(db, rawDb, row.task_id);
       totalOutputs++;
       totalUpdated += result.updated;
       allErrors.push(...result.errors);
@@ -1014,10 +901,7 @@ export class QueueService {
     return { totalOutputs, updated: totalUpdated, errors: allErrors };
   }
 
-  /**
-   * Finds the next available 'ready' task and starts it if the concurrency limit allows.
-   */
-  static processNext(drizzle: SqliteNapiAdapter) {
+  static processNext(db: DrizzleDb) {
     const activeCount = TranscodingService.getProcessingCount();
     const max = TranscodingService.getMaxConcurrent();
 
@@ -1026,10 +910,10 @@ export class QueueService {
       return;
     }
 
-    const nextTask = drizzle.get(mediaTasksTable, {
-      where: "status = 'ready'",
-      orderBy: "created_at ASC",
-    }) as Record<string, unknown> | undefined;
+    const nextTask = db.select().from(mediaTasksTable)
+      .where(eq(mediaTasksTable.status, "ready"))
+      .orderBy(asc(mediaTasksTable.created_at))
+      .get();
 
     if (!nextTask) {
       console.log("[Queue] No tasks ready for processing.");
@@ -1037,6 +921,6 @@ export class QueueService {
     }
 
     console.log(`[Queue] Auto-starting next task: ${nextTask.id} (${nextTask.title})`);
-    this.start(drizzle, nextTask.id as number, null);
+    this.start(db, nextTask.id as number, null);
   }
 }

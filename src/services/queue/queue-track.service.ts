@@ -1,3 +1,5 @@
+import { eq, and, like } from "drizzle-orm";
+import type { DrizzleDb } from "../../db/index";
 import {
   mediaTasksTable,
   mediaTaskTracksTable,
@@ -7,15 +9,26 @@ import { filesTable } from "../../schema/files";
 import { FileService } from "../file.service";
 import { HlsS3Storage } from "../transcoding/compat";
 import { TranscodingService } from "../transcoding/transcoder";
-import type { SqliteNapiAdapter } from "../../core/index";
-import type { InferRow } from "../../core/index";
 import { FFmpegCommand, type ProbeData } from "ffmpeg-lib";
 import { getFFmpegPaths } from "../transcoding/ffmpeg-instance";
 import { editMasterPlaylist } from "../transcoding/m3u8-parser";
 
-type TaskRow = InferRow<typeof mediaTasksTable>;
-type TrackRow = InferRow<typeof mediaTaskTracksTable>;
-type TrackResult = TrackRow & { file_id?: number };
+type TrackResult = {
+  id: number;
+  task_id: number;
+  track_type: string;
+  url: string;
+  label: string | null;
+  lang: string | null;
+  is_external: number | null;
+  action: string | null;
+  replace_lang: string | null;
+  metadata: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  file_id?: number;
+};
+
 type ExtractedTrack = {
   id: number;
   type: string;
@@ -24,10 +37,6 @@ type ExtractedTrack = {
   lang: string;
 };
 
-/**
- * Extracts a file ID from a /files/:id/view URL pattern.
- * Returns the parsed number or null if the URL doesn't match.
- */
 function parseFileIdFromUrl(url: string): number | null {
   if (!url.includes("/files/")) return null;
   const match = url.match(/\/files\/(\d+)\/view/);
@@ -37,7 +46,7 @@ function parseFileIdFromUrl(url: string): number | null {
 
 export class QueueTrackService {
   static addTrack(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     taskId: number,
     data: {
       type: "audio" | "subtitle";
@@ -51,31 +60,21 @@ export class QueueTrackService {
       metadata?: Record<string, unknown>;
     },
   ): TrackResult | { error: string } {
-    const task = drizzle.get(mediaTasksTable, {
-      select: "id",
-      where: "id = ?",
-      params: [taskId]
-    });
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, taskId)).get();
     if (!task) return { error: "Task not found" };
 
     let trackUrl = "";
     let isExternal = data.is_external ? 1 : 0;
 
     if (data.file_id) {
-      const fileRec = drizzle
-        .select(filesTable)
-        .where("id = ?", [data.file_id])
-        .get();
+      const fileRec = db.select().from(filesTable).where(eq(filesTable.id, data.file_id)).get();
       if (!fileRec) return { error: "File not found" };
       trackUrl = `file:${fileRec.id}`;
       isExternal = 1;
     } else if (data.url) {
       const resolvedFileId = parseFileIdFromUrl(data.url);
       if (resolvedFileId) {
-        const fileRec = drizzle
-          .select(filesTable)
-          .where("id = ?", [resolvedFileId])
-          .get();
+        const fileRec = db.select().from(filesTable).where(eq(filesTable.id, resolvedFileId)).get();
         if (fileRec) {
           trackUrl = `file:${fileRec.id}`;
           isExternal = 1;
@@ -88,40 +87,26 @@ export class QueueTrackService {
       return { error: "file_id or url is required" };
     }
 
-    const result = drizzle
-      .insert(mediaTaskTracksTable)
-      .values({
-        task_id: taskId,
-        track_type: data.type,
-        url: trackUrl,
-        label: data.label ?? undefined,
-        lang: data.lang ?? undefined,
-        is_external: isExternal,
-        action: data.action,
-        replace_lang: data.replace_lang ?? undefined,
-        metadata: data.metadata ? JSON.stringify(data.metadata) : undefined,
-      })
-      .run();
+    const inserted = db.insert(mediaTaskTracksTable).values({
+      task_id: taskId,
+      track_type: data.type,
+      url: trackUrl,
+      label: data.label ?? undefined,
+      lang: data.lang ?? undefined,
+      is_external: isExternal,
+      action: data.action,
+      replace_lang: data.replace_lang ?? undefined,
+      metadata: data.metadata ? JSON.stringify(data.metadata) : undefined,
+    }).returning().get()!;
 
-    const taskFull = drizzle.get(mediaTasksTable, {
-      where: "id = ?",
-      params: [taskId]
-    });
+    const taskFull = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, taskId)).get();
     if (taskFull && taskFull.status === "completed") {
       TranscodingService.processExternalTracks(taskId).catch((err) => {
-        console.error(
-          `[Queue] Failed to auto-sync tracks for task ${taskId}:`,
-          err,
-        );
+        console.error(`[Queue] Failed to auto-sync tracks for task ${taskId}:`, err);
       });
     }
 
-    const trackResult: TrackResult = {
-      ...drizzle.get(mediaTaskTracksTable, {
-        where: "id = ?",
-        params: [result.lastInsertRowid]
-      })!,
-    };
+    const trackResult: TrackResult = { ...inserted };
 
     if (data.file_id) {
       trackResult.file_id = data.file_id;
@@ -136,7 +121,7 @@ export class QueueTrackService {
   }
 
   static updateTrack(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     taskId: number,
     trackId: number,
     data: {
@@ -151,13 +136,10 @@ export class QueueTrackService {
       url?: string;
     },
   ): TrackResult | { error: string } {
-    const existingTrack = drizzle.get(mediaTaskTracksTable, {
-      where: "id = ?",
-      params: [trackId]
-    });
+    const existingTrack = db.select().from(mediaTaskTracksTable).where(eq(mediaTaskTracksTable.id, trackId)).get();
     if (!existingTrack) return { error: "Track not found" };
 
-    const updateData: Partial<TrackRow> = {
+    const updateData: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
 
@@ -165,28 +147,19 @@ export class QueueTrackService {
     if (data.label !== undefined) updateData.label = data.label;
     if (data.lang !== undefined) updateData.lang = data.lang;
     if (data.action !== undefined) updateData.action = data.action;
-    if (data.replace_lang !== undefined)
-      updateData.replace_lang = data.replace_lang;
-    if (data.is_external !== undefined)
-      updateData.is_external = data.is_external ? 1 : 0;
-    if (data.metadata !== undefined)
-      updateData.metadata = JSON.stringify(data.metadata);
+    if (data.replace_lang !== undefined) updateData.replace_lang = data.replace_lang;
+    if (data.is_external !== undefined) updateData.is_external = data.is_external ? 1 : 0;
+    if (data.metadata !== undefined) updateData.metadata = JSON.stringify(data.metadata);
 
     if (data.file_id) {
-      const fileRec = drizzle.get(filesTable, {
-        where: "id = ?",
-        params: [data.file_id]
-      });
+      const fileRec = db.select().from(filesTable).where(eq(filesTable.id, data.file_id)).get();
       if (!fileRec) return { error: "File not found" };
       updateData.url = `file:${fileRec.id}`;
       updateData.is_external = 1;
     } else if (data.url !== undefined) {
       const resolvedFileId = parseFileIdFromUrl(data.url);
       if (resolvedFileId) {
-        const fileRec = drizzle.get(filesTable, {
-          where: "id = ?",
-          params: [resolvedFileId]
-        });
+        const fileRec = db.select().from(filesTable).where(eq(filesTable.id, resolvedFileId)).get();
         if (fileRec) {
           updateData.url = `file:${fileRec.id}`;
           updateData.is_external = 1;
@@ -197,30 +170,21 @@ export class QueueTrackService {
       }
     }
 
-    const result = drizzle
-      .update(mediaTaskTracksTable)
-      .set(updateData)
-      .where("id = ? AND task_id = ?", [trackId, taskId])
-      .run();
+    const updated = db.update(mediaTaskTracksTable).set(updateData)
+      .where(and(eq(mediaTaskTracksTable.id, trackId), eq(mediaTaskTracksTable.task_id, taskId)))
+      .returning().get();
 
-    if (result.changes === 0) return { error: "Track not found" };
+    if (!updated) return { error: "Track not found" };
 
-    const task = drizzle.get(mediaTasksTable, {
-      select: "status",
-      where: "id = ?",
-      params: [taskId]
-    });
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, taskId)).get();
     if (task && task.status === "completed") {
       TranscodingService.processExternalTracks(taskId).catch((err) => {
-        console.error(
-          `[Queue] Failed to auto-sync tracks for task ${taskId}:`,
-          err,
-        );
+        console.error(`[Queue] Failed to auto-sync tracks for task ${taskId}:`, err);
       });
     }
 
     const trackResult: TrackResult = {
-      ...drizzle.get(mediaTaskTracksTable, { where: "id = ?", params: [trackId] })!,
+      ...db.select().from(mediaTaskTracksTable).where(eq(mediaTaskTracksTable.id, trackId)).get()!,
     };
 
     if (trackResult.url && trackResult.url.startsWith("file:")) {
@@ -231,14 +195,13 @@ export class QueueTrackService {
   }
 
   static async removeTrack(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     taskId: number,
     trackId: number,
   ): Promise<{ error: string } | { success: true }> {
-    const track = drizzle.get(mediaTaskTracksTable, {
-      where: "id = ? AND task_id = ?",
-      params: [trackId, taskId]
-    });
+    const track = db.select().from(mediaTaskTracksTable)
+      .where(and(eq(mediaTaskTracksTable.id, trackId), eq(mediaTaskTracksTable.task_id, taskId)))
+      .get();
     if (!track) return { error: "Track not found" };
 
     try {
@@ -274,35 +237,31 @@ export class QueueTrackService {
         await HlsS3Storage.deleteFile(`${tracksDir}/${destFilename}`);
         await HlsS3Storage.deleteFile(`${outputDir}/${subPlaylistName}`);
 
-        drizzle.delete(filesTable).where("filename = ?", [destFilename]).run();
-        drizzle
-          .delete(mediaCustomSubtitlesTable)
-          .where("track_id = ?", [track.id])
-          .run();
+        db.delete(filesTable).where(eq(filesTable.filename, destFilename)).run();
+        db.delete(mediaCustomSubtitlesTable).where(eq(mediaCustomSubtitlesTable.track_id, track.id)).run();
       } else {
         const destFilename = `audio_${track.id}_${track.lang || "und"}.m4a`;
         await HlsS3Storage.deleteFile(`${tracksDir}/${destFilename}`);
 
-        drizzle.delete(filesTable).where("filename = ?", [destFilename]).run();
+        db.delete(filesTable).where(eq(filesTable.filename, destFilename)).run();
       }
     } catch (err) {
       console.error(`Failed to cleanup assets for track ${trackId}:`, err);
     }
 
-    const result = drizzle
-      .delete(mediaTaskTracksTable)
-      .where("id = ? AND task_id = ?", [trackId, taskId])
-      .run();
+    const deleted = db.delete(mediaTaskTracksTable)
+      .where(and(eq(mediaTaskTracksTable.id, trackId), eq(mediaTaskTracksTable.task_id, taskId)))
+      .returning().get();
 
-    if (result.changes === 0) return { error: "Track not found" };
+    if (!deleted) return { error: "Track not found" };
     return { success: true };
   }
 
   static async extractTracks(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): Promise<ExtractedTrack[] | { error: string }> {
-    const task = drizzle.get(mediaTasksTable, { where: "id = ?", params: [id] });
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     const resolvedPath = FileService.resolveRelativeFromStorage(
@@ -340,17 +299,18 @@ export class QueueTrackService {
       const outputPath = FileService.resolveExtractedPath(id, filename);
 
       try {
-        const existingTrack = drizzle.get(mediaTaskTracksTable, {
-          where: "task_id = ? AND url LIKE ?",
-          params: [id, `%${filename}`]
-        });
+        const existingTrack = db.select().from(mediaTaskTracksTable)
+          .where(and(
+            eq(mediaTaskTracksTable.task_id, id),
+            like(mediaTaskTracksTable.url, `%${filename}%`),
+          )).get();
         if (existingTrack) {
           results.push({
             id: Number(existingTrack.id),
             type: "subtitle",
             url: existingTrack.url,
-            label: existingTrack.label,
-            lang: existingTrack.lang,
+            label: existingTrack.label ?? "",
+            lang: existingTrack.lang ?? "",
           });
           continue;
         }
@@ -372,7 +332,7 @@ export class QueueTrackService {
           continue;
         }
 
-        FileService.registerExistingFile(drizzle, outputPath, {
+        FileService.registerExistingFile(db, outputPath, {
           original_name: `${label}.${ext}`,
           category: "subtitle",
           metadata: { task_id: id, original_codec: codec, format: ext },
@@ -404,7 +364,7 @@ export class QueueTrackService {
               rawVtt.trim().length > 0 &&
               rawVtt.trim() !== "WEBVTT"
             ) {
-              FileService.registerExistingFile(drizzle, vttFfmpegPath, {
+              FileService.registerExistingFile(db, vttFfmpegPath, {
                 original_name: `${label}_ffmpeg.vtt`,
                 category: "subtitle",
                 metadata: { task_id: id, original_codec: codec, format: "vtt" },
@@ -421,43 +381,36 @@ export class QueueTrackService {
           }
         }
 
-        const res = drizzle
-          .insert(mediaTaskTracksTable)
-          .values({
-            task_id: id,
-            track_type: "subtitle",
-            url: finalUrl,
-            label,
-            lang,
-            is_external: 0,
-            action: "add",
-            metadata: JSON.stringify({
-              original_codec: codec,
-              original_ext: ext,
-            }),
-          })
-          .run();
+        const inserted = db.insert(mediaTaskTracksTable).values({
+          task_id: id,
+          track_type: "subtitle",
+          url: finalUrl,
+          label,
+          lang,
+          is_external: 0,
+          action: "add",
+          metadata: JSON.stringify({
+            original_codec: codec,
+            original_ext: ext,
+          }),
+        }).returning().get()!;
 
-        // Register non-VTT original format in custom subtitles table for API serving
         if (ext !== "vtt" && rawContent && rawContent.trim().length > 0) {
-          drizzle
-            .insert(mediaCustomSubtitlesTable)
-            .values({
-              task_id: id,
-              track_id: res.lastInsertRowid as number,
-              format: ext,
-              content: rawContent,
-              lang,
-              label,
-            })
-            .run();
+          db.insert(mediaCustomSubtitlesTable).values({
+            task_id: id,
+            track_id: inserted.id,
+            format: ext,
+            content: rawContent,
+            lang,
+            label,
+          }).run();
           console.log(
             `[Queue] Registered custom subtitle ${index} (${ext}) for API serving`,
           );
         }
 
         results.push({
-          id: Number(res.lastInsertRowid),
+          id: inserted.id,
           type: "subtitle",
           url: finalUrl,
           label,
@@ -475,10 +428,10 @@ export class QueueTrackService {
   }
 
   static async extractAudioTracks(
-    drizzle: SqliteNapiAdapter,
+    db: DrizzleDb,
     id: number,
   ): Promise<ExtractedTrack[] | { error: string }> {
-    const task = drizzle.get(mediaTasksTable, { where: "id = ?", params: [id] });
+    const task = db.select().from(mediaTasksTable).where(eq(mediaTasksTable.id, id)).get();
     if (!task) return { error: "Task not found" };
 
     const resolvedPath = FileService.resolveRelativeFromStorage(
@@ -522,22 +475,19 @@ export class QueueTrackService {
 
         const url = FileService.getPublicUrl(outputPath);
 
-        const res = drizzle
-          .insert(mediaTaskTracksTable)
-          .values({
-            task_id: id,
-            track_type: "audio",
-            url,
-            label,
-            lang,
-            is_external: 0,
-            action: "add",
-            metadata: JSON.stringify({ original_codec: codec }),
-          })
-          .run();
+        const inserted = db.insert(mediaTaskTracksTable).values({
+          task_id: id,
+          track_type: "audio",
+          url,
+          label,
+          lang,
+          is_external: 0,
+          action: "add",
+          metadata: JSON.stringify({ original_codec: codec }),
+        }).returning().get()!;
 
         results.push({
-          id: Number(res.lastInsertRowid),
+          id: inserted.id,
           type: "audio",
           url,
           label,

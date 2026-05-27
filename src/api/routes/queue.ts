@@ -1,11 +1,11 @@
 import { QueueService } from "../../services/queue/queue.service";
 import { QueueTrackService } from "../../services/queue/queue-track.service";
-import type { SqliteNapiAdapter } from "../../core/index";
+import type { DrizzleDb } from "../../db/index";
 import type { FileService } from "../../services/file.service";
 
 interface RouteResult {
   status: number;
-  data: any;
+  data: Record<string, unknown>;
 }
 
 export async function handleQueueRoute(
@@ -13,11 +13,10 @@ export async function handleQueueRoute(
   path: string,
   url: URL,
   req: Request,
-  db: SqliteNapiAdapter,
+  db: DrizzleDb,
   fileService: FileService,
   userId: number | null,
 ): Promise<RouteResult | null> {
-
   if (method === "GET" && path === "/api/v1/queue") {
     const page = parseInt(url.searchParams.get("page") || "1", 10);
     const limit = parseInt(url.searchParams.get("limit") || "20", 10);
@@ -33,7 +32,10 @@ export async function handleQueueRoute(
   }
 
   if (method === "POST" && path === "/api/v1/queue") {
-    const body = (await req.json().catch(() => ({}))) as Record<string, any>;
+    const body = (await req.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
     const result = QueueService.create(db, {
       title: body.title as string,
       description: body.description as string | undefined,
@@ -72,17 +74,25 @@ export async function handleQueueRoute(
   }
 
   if (method === "POST" && path === "/api/v1/queue/backfill") {
-    const result = await QueueService.backfillAllOutputs(db, db as any);
+    const result = await QueueService.backfillAllOutputs(db, db);
     return { status: 200, data: result };
   }
 
   // Thumbnail by entity
-  const thumbEntityMatch = path.match(/^\/api\/v1\/queue\/thumbnail\/(media|episode|season)\/(\d+)$/);
+  const thumbEntityMatch = path.match(
+    /^\/api\/v1\/queue\/thumbnail\/(media|episode|season)\/(\d+)$/,
+  );
   if (thumbEntityMatch && method === "POST") {
     const entityType = thumbEntityMatch[1] as "media" | "episode" | "season";
     const entityId = parseInt(thumbEntityMatch[2]!, 10);
     const seekParam = url.searchParams.get("seek") || undefined;
-    const result = await QueueService.getOrGenerateThumbnail(db, db as any, entityType, entityId, seekParam);
+    const result = await QueueService.getOrGenerateThumbnail(
+      db,
+      db,
+      entityType,
+      entityId,
+      seekParam,
+    );
     if ("error" in result) return { status: 400, data: result };
     return { status: 200, data: result };
   }
@@ -102,7 +112,7 @@ export async function handleQueueRoute(
     }
 
     if (method === "PUT" && !subPath) {
-      const body = (await req.json().catch(() => ({}))) as Record<string, any>;
+      const body = (await req.json().catch(() => ({}))) as Record<string>;
       const result = QueueService.update(db, id, {
         title: body.title as string | undefined,
         description: body.description as string | undefined,
@@ -152,15 +162,23 @@ export async function handleQueueRoute(
     }
 
     if (method === "POST" && subPath === "/add-quality") {
-      const body = (await req.json().catch(() => ({}))) as Record<string, any>;
-      const result = QueueService.addQualityToTask(db, id, body.quality as string);
+      const body = await req.json().catch(() => ({}));
+      const result = QueueService.addQualityToTask(
+        db,
+        id,
+        body.quality as string,
+      );
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
     }
 
     if (method === "POST" && subPath === "/quality") {
-      const body = (await req.json().catch(() => ({}))) as Record<string, any>;
-      const result = QueueService.setQualities(db, id, body.qualities as string[]);
+      const body = await req.json().catch(() => ({}));
+      const result = QueueService.setQualities(
+        db,
+        id,
+        body.qualities as string[],
+      );
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
     }
@@ -185,13 +203,18 @@ export async function handleQueueRoute(
 
     if (method === "POST" && subPath === "/thumbnail") {
       const seekParam = url.searchParams.get("seek");
-      const result = await QueueService.generateThumbnail(db, db as any, id, seekParam);
+      const result = await QueueService.generateThumbnail(
+        db,
+        db,
+        id,
+        seekParam,
+      );
       if ("error" in result) return { status: 400, data: result };
       return { status: 201, data: result };
     }
 
     if (method === "POST" && subPath === "/backfill") {
-      const result = await QueueService.backfillTaskOutputs(db, db as any, id);
+      const result = await QueueService.backfillTaskOutputs(db, db, id);
       return { status: 200, data: result };
     }
 
@@ -199,7 +222,10 @@ export async function handleQueueRoute(
     const trackMatch = subPath.match(/^\/tracks\/(\d+)$/);
     if (method === "PUT" && trackMatch) {
       const trackId = parseInt(trackMatch[1]!, 10);
-      const body = (await req.json().catch(() => ({}))) as Record<string, any>;
+      const body = (await req.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
       const result = QueueTrackService.updateTrack(db, id, trackId, body);
       if ("error" in result) return { status: 400, data: result };
       return { status: 200, data: result };
@@ -213,8 +239,11 @@ export async function handleQueueRoute(
     }
 
     if (method === "POST" && subPath === "/tracks") {
-      const body = (await req.json().catch(() => ({}))) as Record<string, any>;
-      const result = QueueTrackService.addTrack(db, id, body as any);
+      const body = (await req.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
+      const result = QueueTrackService.addTrack(db, id, body);
       if ("error" in result) return { status: 400, data: result };
       return { status: 201, data: result };
     }

@@ -12,7 +12,9 @@ import {
 import { extractSubtitlesToVTT } from "./subtitle-extractor";
 import { processExternalTracks } from "./external-tracks";
 import { extractOutputMetadata } from "./metadata";
-import { eq, type SqliteNapiAdapter } from "../../core/index";
+import { eq, sql } from "drizzle-orm";
+import type { DrizzleDb } from "../../db/index";
+import { runRaw, queryRaw } from "./compat";
 import { FileService } from "../file.service";
 import type { CompositeStorageBackend } from "../storage/composite-backend";
 import { getEventBus } from "../queue/queue.events";
@@ -25,17 +27,17 @@ export class TranscodingService {
 
   private static maxConcurrent = parseInt(process.env.MAX_CONCURRENT_TRANSCODES || "1", 10);
 
-  private static db: SqliteNapiAdapter | null = null;
+  private static db: DrizzleDb | null = null;
   private static fileService: FileService | null = null;
   private static storage: CompositeStorageBackend | null = null;
 
   private static logger: Logger = {
-    info: (...msg: any[]) => console.log("[Transcoder]", ...msg),
-    warn: (...msg: any[]) => console.warn("[Transcoder]", ...msg),
-    error: (...msg: any[]) => console.error("[Transcoder]", ...msg),
+    info: (...msg: unknown[]) => console.log("[Transcoder]", ...msg),
+    warn: (...msg: unknown[]) => console.warn("[Transcoder]", ...msg),
+    error: (...msg: unknown[]) => console.error("[Transcoder]", ...msg),
   };
 
-  static initialize(db: SqliteNapiAdapter, fileService: FileService, storage: CompositeStorageBackend) {
+  static initialize(db: DrizzleDb, fileService: FileService, storage: CompositeStorageBackend) {
     this.db = db;
     this.fileService = fileService;
     this.storage = storage;
@@ -61,17 +63,15 @@ export class TranscodingService {
 
     if (this.processingTasks.size >= this.maxConcurrent) {
       this.logger.warn(`Task ${taskId} queued: Concurrency limit (${this.maxConcurrent}) reached. Reverting to pending.`);
-      (this.db as SqliteNapiAdapter)
-        .update(mediaTasksTable)
+      this.db.update(mediaTasksTable)
         .set({ status: "pending", updated_at: new Date().toISOString() })
-        .where(eq(mediaTasksTable.columnMap.id, taskId))
+        .where(eq(mediaTasksTable.id, taskId))
         .run();
       return;
     }
 
-    const task = (this.db as SqliteNapiAdapter)
-      .select(mediaTasksTable)
-      .where("id = ?", [taskId])
+    const task = this.db.select().from(mediaTasksTable)
+      .where(eq(mediaTasksTable.id, taskId))
       .get() as MediaTask | undefined;
 
     if (!task) {
@@ -90,9 +90,8 @@ export class TranscodingService {
 
     const outputDir = this.fileService!.getHlsOutputDir(taskId);
 
-    const existingOutputs = (this.db as SqliteNapiAdapter)
-      .select(mediaHlsOutputsTable)
-      .where("task_id = ?", [taskId])
+    const existingOutputs = this.db.select().from(mediaHlsOutputsTable)
+      .where(eq(mediaHlsOutputsTable.task_id, taskId))
       .all() as { quality: string }[];
 
     const existingQualities = new Set(existingOutputs.map((o) => o.quality));
@@ -166,9 +165,9 @@ export class TranscodingService {
         });
 
         if (commandPct === 0 || commandPct >= 100 || Math.random() > 0.9) {
-          (this.db as SqliteNapiAdapter).run(
+          runRaw(
             "UPDATE media_tasks SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            [overallProgress, taskId],
+            overallProgress, taskId,
           );
         }
       };
@@ -219,19 +218,16 @@ export class TranscodingService {
         masterPlaylist.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${targetWidth}x${targetHeight}${subtitlesAttr}`);
         masterPlaylist.push(`${quality}/index.m3u8`);
 
-        (this.db as SqliteNapiAdapter)
-          .insert(mediaHlsOutputsTable)
-          .values({
-            task_id: taskId,
-            media_id: task.media_id,
-            season_id: task.season_id ?? undefined,
-            episode_id: task.episode_id ?? undefined,
-            m3u8_url: `/hls/${taskId}/master.m3u8`,
-            quality,
-            resolution: `${targetWidth}x${targetHeight}`,
-            bandwidth,
-          })
-          .run();
+        this.db.insert(mediaHlsOutputsTable).values({
+          task_id: taskId,
+          media_id: task.media_id,
+          season_id: task.season_id ?? undefined,
+          episode_id: task.episode_id ?? undefined,
+          m3u8_url: `/hls/${taskId}/master.m3u8`,
+          quality,
+          resolution: `${targetWidth}x${targetHeight}`,
+          bandwidth,
+        }).run();
       }
 
       for (const quality of selectedQualities) {
@@ -259,9 +255,9 @@ export class TranscodingService {
 
       await this.storage!.uploadDir(outputDir, `hls/${taskId}`);
 
-      (this.db as SqliteNapiAdapter).run(
+      runRaw(
         "UPDATE media_tasks SET status = 'completed', progress = 100, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [taskId],
+        taskId,
       );
 
       getEventBus().emitTranscodeProgress({
@@ -287,14 +283,16 @@ export class TranscodingService {
       this.logger.error(`Task ${taskId} failed:`, err);
       const errorMessage = err instanceof Error ? err.message : String(err);
 
-      const currentTask = ((this.db as SqliteNapiAdapter).select(mediaTasksTable).where("id = ?", [taskId]).get()) as { status: string } | undefined;
+      const currentTask = this.db.select().from(mediaTasksTable)
+        .where(eq(mediaTasksTable.id, taskId))
+        .get() as { status: string } | undefined;
 
       if (currentTask?.status === "stopped") {
         this.logger.info(`Task ${taskId} was manually stopped, skipping failure status update.`);
       } else {
-        (this.db as SqliteNapiAdapter).run(
+        runRaw(
           "UPDATE media_tasks SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-          [errorMessage, taskId],
+          errorMessage, taskId,
         );
       }
 
@@ -348,18 +346,16 @@ export class TranscodingService {
   static resetStaleTasks() {
     if (!this.db) return;
     try {
-      const staleTasks = (this.db as SqliteNapiAdapter)
-        .queryRaw<{ id: number }>("SELECT id FROM media_tasks WHERE status = 'processing'")
-        .all();
+      const staleTasks = queryRaw<{ id: number }>("SELECT id FROM media_tasks WHERE status = 'processing'");
       if (staleTasks.length === 0) return;
 
       this.logger.warn(`Found ${staleTasks.length} task(s) with stale 'processing' status after restart, resetting to 'stopped'`);
       for (const { id } of staleTasks) {
         this.processingTasks.delete(id);
         this.commands.delete(id);
-        (this.db as SqliteNapiAdapter).run(
+        runRaw(
           "UPDATE media_tasks SET status = 'stopped', error_message = 'Server restarted — resume to continue', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-          [id],
+          id,
         );
       }
     } catch (err) {
@@ -367,7 +363,7 @@ export class TranscodingService {
     }
   }
 }
-// Static config
+
 let gMainApiUrl: string = "";
 let gSharedApiKey: string = "";
 

@@ -1,7 +1,8 @@
 import { join, extname, dirname, isAbsolute } from "path";
 import { existsSync, mkdirSync, copyFileSync, statSync, unlinkSync, writeFileSync, readFileSync } from "fs";
 import { randomUUID } from "crypto";
-import type { SqliteNapiAdapter } from "../core/index";
+import { eq } from "drizzle-orm";
+import type { DrizzleDb } from "../db/index";
 import { filesTable } from "../schema/files";
 
 let gStorageBaseDir: string = "";
@@ -158,23 +159,26 @@ export class FileService {
     return absolutePath;
   }
 
-  registerExistingFile(db: SqliteNapiAdapter, sourcePath: string, options: RegisterFileOptions = {}): FileRecord | { error: string } {
+  registerExistingFile(db: DrizzleDb, sourcePath: string, options: RegisterFileOptions = {}): FileRecord | { error: string } {
     if (!existsSync(sourcePath)) return { error: "File does not exist on disk" };
     const stats = statSync(sourcePath);
     const size = stats.size;
     const filename = this.resolveRelativeFromStorage(sourcePath);
-    const existing = db.get(filesTable, { where: "filename = ?", params: [filename] });
+    const existing = db.select().from(filesTable).where(eq(filesTable.filename, filename)).get();
     if (existing) return existing as FileRecord;
-    const result = db.insert(filesTable).values({
-      filename, original_name: filename, mime_type: getMimeType(filename),
-      size_bytes: size, category: detectCategory(filename),
-      metadata: options.metadata ? JSON.stringify(options.metadata) : undefined,
-      user_id: options.user_id ?? undefined,
-    }).run();
-    return db.get(filesTable, { where: "id = ?", params: [result.lastInsertRowid] }) as FileRecord;
+    const { getRawDb } = require("../db/index");
+    const rawDb = getRawDb();
+    const result = rawDb.run(
+      `INSERT INTO files (filename, original_name, mime_type, size_bytes, category, metadata, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      filename, filename, getMimeType(filename), size, detectCategory(filename),
+      options.metadata ? JSON.stringify(options.metadata) : null,
+      options.user_id ?? null,
+    );
+    return db.select().from(filesTable).where(eq(filesTable.id, Number(result.lastInsertRowid))).get() as FileRecord;
   }
 
-  copyFile(db: SqliteNapiAdapter, sourcePath: string, destDir: string, options: RegisterFileOptions = {}): FileRecord | { error: string } {
+  copyFile(db: DrizzleDb, sourcePath: string, destDir: string, options: RegisterFileOptions = {}): FileRecord | { error: string } {
     if (!existsSync(sourcePath)) return { error: "Source file does not exist" };
     this.ensureDir(destDir);
     const ext = extname(sourcePath);
@@ -185,22 +189,28 @@ export class FileService {
     const category = options.category || detectCategory(originalName);
     const mimeType = getMimeType(ext.toLowerCase());
     const size = statSync(destPath).size;
-    const result = db.insert(filesTable).values({
-      filename: destFilename, original_name: originalName, mime_type: mimeType,
-      size_bytes: size, category, metadata: options.metadata ? JSON.stringify(options.metadata) : undefined,
-      user_id: options.user_id ?? undefined,
-    }).run();
-    return db.get(filesTable, { where: "id = ?", params: [result.lastInsertRowid] }) as FileRecord;
+    const { getRawDb } = require("../db/index");
+    const rawDb = getRawDb();
+    const result = rawDb.run(
+      `INSERT INTO files (filename, original_name, mime_type, size_bytes, category, metadata, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      destFilename, originalName, mimeType, size, category,
+      options.metadata ? JSON.stringify(options.metadata) : null,
+      options.user_id ?? null,
+    );
+    return db.select().from(filesTable).where(eq(filesTable.id, Number(result.lastInsertRowid))).get() as FileRecord;
   }
 
-  deleteFile(db: SqliteNapiAdapter, fileId: number): { success: boolean; error?: string } {
-    const fileRow = db.get(filesTable, { where: "id = ?", params: [fileId] }) as FileRecord | undefined;
+  deleteFile(db: DrizzleDb, fileId: number): { success: boolean; error?: string } {
+    const fileRow = db.select().from(filesTable).where(eq(filesTable.id, fileId)).get() as FileRecord | undefined;
     if (!fileRow) return { success: false, error: "File not found" };
     const filePath = join(this.getUploadsDir(), fileRow.filename);
     try { if (existsSync(filePath)) unlinkSync(filePath); } catch (err) { console.warn(`Could not delete file ${fileId}:`, err); }
-    db.delete(filesTable).where("id = ?", [fileId]).run();
+    db.delete(filesTable).where(eq(filesTable.id, fileId)).run();
     if (fileRow.user_id) {
-      db.execute("UPDATE user_quotas SET used_bytes = MAX(0, used_bytes - ?) WHERE user_id = ?", [fileRow.size_bytes, fileRow.user_id]);
+      const { getRawDb } = require("../db/index");
+      const rawDb = getRawDb();
+      rawDb.run("UPDATE user_quotas SET used_bytes = MAX(0, used_bytes - ?) WHERE user_id = ?", fileRow.size_bytes, fileRow.user_id);
     }
     return { success: true };
   }
@@ -221,16 +231,16 @@ export class FileService {
   static resolveUploadsPath(urlPath: string): string { return gf().resolveUploadsPath(urlPath); }
   static resolveStoragePath(urlPath: string): string { return gf().resolveStoragePath(urlPath); }
   static resolveRelativeFromStorage(absolutePath: string): string { return gf().resolveRelativeFromStorage(absolutePath); }
-  static registerExistingFile(db: SqliteNapiAdapter, sourcePath: string, options?: RegisterFileOptions): FileRecord | { error: string } { return gf().registerExistingFile(db, sourcePath, options); }
-  static copyFile(db: SqliteNapiAdapter, sourcePath: string, destDir: string, options?: RegisterFileOptions): FileRecord | { error: string } { return gf().copyFile(db, sourcePath, destDir, options); }
-  static deleteFile(db: SqliteNapiAdapter, fileId: number): { success: boolean; error?: string } { return gf().deleteFile(db, fileId); }
+  static registerExistingFile(db: DrizzleDb, sourcePath: string, options?: RegisterFileOptions): FileRecord | { error: string } { return gf().registerExistingFile(db, sourcePath, options); }
+  static copyFile(db: DrizzleDb, sourcePath: string, destDir: string, options?: RegisterFileOptions): FileRecord | { error: string } { return gf().copyFile(db, sourcePath, destDir, options); }
+  static deleteFile(db: DrizzleDb, fileId: number): { success: boolean; error?: string } { return gf().deleteFile(db, fileId); }
   static getFilePath(filename: string, subDir?: string): string { return join(gf().getUploadsDir(), ...(subDir ? [subDir] : []), filename); }
   static fileExists(filename: string, subDir?: string): boolean { return gf().exists(join(gf().getUploadsDir(), ...(subDir ? [subDir] : []), filename)); }
   static getPublicUrl(absolutePathOrRelative: string): string {
     const relative = gf().resolveRelativeFromStorage(absolutePathOrRelative);
     return `/uploads/${relative.replace(/\\/g, "/")}`;
   }
-  static resolveInternalUrl(_db: SqliteNapiAdapter, url: string): string { return url; }
+  static resolveInternalUrl(_db: DrizzleDb, url: string): string { return url; }
   static deletePhysicalFile(filePath: string): boolean {
     if (existsSync(filePath)) { unlinkSync(filePath); return true; }
     return false;

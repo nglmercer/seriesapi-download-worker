@@ -1,14 +1,15 @@
+import { eq, asc } from "drizzle-orm";
 import { TranscodingService } from "../transcoding/transcoder";
-import type { SqliteNapiAdapter } from "../../core/index";
+import type { DrizzleDb } from "../../db/index";
 import { mediaTasksTable } from "../../schema/queue";
 
 export class QueueWorker {
   private interval: ReturnType<typeof setInterval> | null = null;
   private pollMs: number;
   private running = false;
-  private db: SqliteNapiAdapter;
+  private db: DrizzleDb;
 
-  constructor(db: SqliteNapiAdapter, pollMs = 5000) {
+  constructor(db: DrizzleDb, pollMs = 5000) {
     this.db = db;
     this.pollMs = pollMs;
   }
@@ -38,10 +39,10 @@ export class QueueWorker {
       const max = TranscodingService.getMaxConcurrent();
       if (activeCount >= max) return;
 
-      const nextTask = this.db.get(mediaTasksTable, {
-        where: "status = 'ready'",
-        orderBy: "created_at ASC",
-      }) as Record<string, unknown> | undefined;
+      const nextTask = this.db.select().from(mediaTasksTable)
+        .where(eq(mediaTasksTable.status, "ready"))
+        .orderBy(asc(mediaTasksTable.created_at))
+        .get();
 
       if (!nextTask) return;
 

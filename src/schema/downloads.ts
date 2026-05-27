@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text, real, index } from "../core/index";
+import { sqliteTable, text, real, integer, index } from "drizzle-orm/sqlite-core";
 
 export const downloadTasksTable = sqliteTable("download_tasks", {
   id: text("id").primaryKey(),
@@ -18,7 +18,7 @@ export const downloadTasksTable = sqliteTable("download_tasks", {
   created_at: text("created_at").notNull().default("(datetime('now'))"),
   completed_at: text("completed_at"),
   updated_at: text("updated_at").notNull().default("(datetime('now'))"),
-}, (table) => ({
-  user_idx: index("idx_download_tasks_user", [table.user_id.name]),
-  status_idx: index("idx_download_tasks_status", [table.status.name]),
-}));
+}, (table) => [
+  index("idx_download_tasks_user").on(table.user_id),
+  index("idx_download_tasks_status").on(table.status),
+]);

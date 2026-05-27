@@ -1,44 +1,26 @@
-import {
-  sqliteTable,
-  integer,
-  text,
-  real,
-  primaryKey,
-  notNull,
-  default_,
-  references,
-  index
-} from "../core/index";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
-const NOW = "CURRENT_TIMESTAMP";
-
-/**
- * files  –  uploaded storage details for uploads endpoint.
- */
 export const filesTable = sqliteTable("files", {
-  id: integer("id").primaryKey().autoincrement(),
+  id: integer("id").primaryKey({ autoIncrement: true }),
   filename: text("filename").notNull(),
   original_name: text("original_name").notNull(),
   mime_type: text("mime_type").notNull(),
   size_bytes: integer("size_bytes").notNull(),
-  category: text("category"), // e.g., 'video', 'subtitle', 'image'
-  status: text("status").default("valid"), // 'valid', 'suspicious', 'quarantine', 'deleted'
-  metadata: text("metadata"), // JSON
+  category: text("category"),
+  status: text("status").default("valid"),
+  metadata: text("metadata"),
   user_id: integer("user_id"),
-  created_at: text("created_at").default(NOW),
-  updated_at: text("updated_at").default(NOW),
-}, (table) => ({
-  user_idIdx: index("user_id_idx", [table.user_id.name]),
-}));
+  created_at: text("created_at").default("CURRENT_TIMESTAMP"),
+  updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
+}, (table) => [
+  index("user_id_idx").on(table.user_id),
+]);
 
-/**
- * user_quotas  –  per-user storage limits tracking.
- */
 export const userQuotasTable = sqliteTable("user_quotas", {
   user_id: integer("user_id").notNull().primaryKey(),
-  limit_bytes: integer("limit_bytes").notNull().default(10737418240), // 10 GB default
+  limit_bytes: integer("limit_bytes").notNull().default(10737418240),
   used_bytes: integer("used_bytes").notNull().default(0),
-  updated_at: text("updated_at").default(NOW),
-}, (table) => ({
-  user_idIdx: index("user_id_idx", [table.user_id.name]),
-}));
+  updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
+}, (table) => [
+  index("user_quota_user_id_idx").on(table.user_id),
+]);

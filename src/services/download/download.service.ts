@@ -1,7 +1,8 @@
 import { join, extname } from "path";
 import { existsSync, mkdirSync, createWriteStream, readdirSync, statSync } from "fs";
 import { randomUUID } from "crypto";
-import type { SqliteNapiAdapter } from "../../core/index";
+import { eq, and, desc, asc } from "drizzle-orm";
+import type { DrizzleDb } from "../../db/index";
 import { FileService } from "../file.service";
 import { downloadTasksTable } from "../../schema/downloads";
 import { filesTable } from "../../schema/files";
@@ -43,12 +44,12 @@ export interface CreateDownloadOptions {
 }
 
 export class DownloadService {
-  private db: SqliteNapiAdapter;
+  private db: DrizzleDb;
   private fileService: FileService;
   private rqbitEmitter: RqbitSessionEmitter | null = null;
   private torrentIdToTaskId = new Map<number, string>();
 
-  constructor(db: SqliteNapiAdapter, fileService: FileService) {
+  constructor(db: DrizzleDb, fileService: FileService) {
     this.db = db;
     this.fileService = fileService;
   }
@@ -84,7 +85,7 @@ export class DownloadService {
         total_bytes: stats.totalBytes,
         progress: Math.round(percentage),
         updated_at: new Date().toISOString(),
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, Math.round(percentage), {
         status: "downloading",
@@ -109,14 +110,15 @@ export class DownloadService {
   }
 
   async recoverStaleDownloads(): Promise<void> {
-    const staleTasks = this.db.select(downloadTasksTable)
-      .where("status = 'downloading' OR status = 'pending'").all();
+    const staleTasks = this.db.select().from(downloadTasksTable)
+      .where(eq(downloadTasksTable.status, "downloading"))
+      .all();
     for (const task of staleTasks) {
       await this.db.update(downloadTasksTable).set({
         status: "failed",
         error: "Server restarted",
         updated_at: new Date().toISOString(),
-      }).where("id = ?", [task.id]).run();
+      }).where(eq(downloadTasksTable.id, task.id)).run();
     }
     console.log(`[download] Recovered ${staleTasks.length} stale download tasks`);
   }
@@ -155,7 +157,7 @@ export class DownloadService {
     this.db.update(downloadTasksTable).set({
       status: "downloading",
       updated_at: new Date().toISOString(),
-    }).where("id = ?", [taskId]).run();
+    }).where(eq(downloadTasksTable.id, taskId)).run();
 
     try {
       if (!this.rqbitEmitter) await this.initRqbit();
@@ -167,7 +169,7 @@ export class DownloadService {
       this.db.update(downloadTasksTable).set({
         torrent_id: rqbitId,
         updated_at: new Date().toISOString(),
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, 0, {
         status: "connecting",
@@ -178,7 +180,7 @@ export class DownloadService {
     }
   }
 
-  private async handleTorrentCompletion(taskId: string, stats: any) {
+  private async handleTorrentCompletion(taskId: string, stats: { name: string; totalBytes: number }) {
     const task = this.getTaskById(taskId);
     if (!task) return;
 
@@ -219,7 +221,7 @@ export class DownloadService {
       const category = detectCategory(largestFile.name);
       const relativePath = this.fileService.resolveRelativeFromStorage(largestFile.path);
 
-      const result = this.db.insert(filesTable).values({
+      const inserted = this.db.insert(filesTable).values({
         filename: relativePath,
         original_name: largestFile.name,
         mime_type: getMimeType(extname(largestFile.name)),
@@ -227,7 +229,7 @@ export class DownloadService {
         category,
         status: "valid",
         user_id: task.user_id,
-      }).run();
+      }).returning().get()!;
 
       const now = new Date().toISOString();
       this.db.update(downloadTasksTable).set({
@@ -235,9 +237,9 @@ export class DownloadService {
         progress: 100,
         completed_at: now,
         file_path: `/api/v1/uploads/${relativePath}`,
-        file_id: result.lastInsertRowid,
+        file_id: inserted.id,
         updated_at: now,
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, 100, {
         status: "completed",
@@ -257,7 +259,7 @@ export class DownloadService {
       status: "failed",
       error: message,
       updated_at: new Date().toISOString(),
-    }).where("id = ?", [taskId]).run();
+    }).where(eq(downloadTasksTable.id, taskId)).run();
 
     getEventBus().emitDownloadProgress(taskId, task.user_id, 0, {
       status: "failed",
@@ -272,7 +274,7 @@ export class DownloadService {
     this.db.update(downloadTasksTable).set({
       status: "downloading",
       updated_at: new Date().toISOString(),
-    }).where("id = ?", [taskId]).run();
+    }).where(eq(downloadTasksTable.id, taskId)).run();
 
     getEventBus().emitDownloadProgress(taskId, task.user_id, 0, { status: "starting", filename });
 
@@ -284,7 +286,7 @@ export class DownloadService {
       this.db.update(downloadTasksTable).set({
         total_bytes: total,
         updated_at: new Date().toISOString(),
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, 5, { status: "connecting", filename });
 
@@ -313,7 +315,7 @@ export class DownloadService {
           downloaded_bytes: downloaded,
           progress,
           updated_at: new Date().toISOString(),
-        }).where("id = ?", [taskId]).run();
+        }).where(eq(downloadTasksTable.id, taskId)).run();
 
         getEventBus().emitDownloadProgress(taskId, task.user_id, progress, {
           status: "downloading", filename, downloaded, total,
@@ -326,7 +328,7 @@ export class DownloadService {
       const detectedCategory = category || detectCategory(filename);
       const relativePath = join("downloads", task.user_id.toString(), savedFilename);
 
-      const result = this.db.insert(filesTable).values({
+      const inserted = this.db.insert(filesTable).values({
         filename: relativePath,
         original_name: filename,
         mime_type: mimeType,
@@ -334,7 +336,7 @@ export class DownloadService {
         category: detectedCategory,
         status: "valid",
         user_id: task.user_id,
-      }).run();
+      }).returning().get()!;
 
       const now = new Date().toISOString();
       this.db.update(downloadTasksTable).set({
@@ -342,9 +344,9 @@ export class DownloadService {
         progress: 100,
         completed_at: now,
         file_path: `/api/v1/uploads/${relativePath}`,
-        file_id: result.lastInsertRowid,
+        file_id: inserted.id,
         updated_at: now,
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, 100, {
         status: "completed", filename, file_path: `/api/v1/uploads/${relativePath}`,
@@ -355,15 +357,15 @@ export class DownloadService {
   }
 
   getTaskById(taskId: string): DownloadTask | undefined {
-    return this.db.get(downloadTasksTable, { where: "id = ?", params: [taskId] }) as DownloadTask | undefined;
+    return this.db.select().from(downloadTasksTable).where(eq(downloadTasksTable.id, taskId)).get() as DownloadTask | undefined;
   }
 
   getActiveTasks(): DownloadTask[] {
-    return this.db.select(downloadTasksTable).orderBy("created_at", "desc").all() as DownloadTask[];
+    return this.db.select().from(downloadTasksTable).orderBy(desc(downloadTasksTable.created_at)).all() as DownloadTask[];
   }
 
   getTasksByUser(userId: number): DownloadTask[] {
-    return this.db.select(downloadTasksTable).where("user_id = ?", [userId]).orderBy("created_at", "desc").all() as DownloadTask[];
+    return this.db.select().from(downloadTasksTable).where(eq(downloadTasksTable.user_id, userId)).orderBy(desc(downloadTasksTable.created_at)).all() as DownloadTask[];
   }
 
   cancelTask(taskId: string): boolean {
@@ -374,7 +376,7 @@ export class DownloadService {
       status: "failed",
       error: "Cancelled by user",
       updated_at: new Date().toISOString(),
-    }).where("id = ?", [taskId]).run();
+    }).where(eq(downloadTasksTable.id, taskId)).run();
 
     if (task.torrent_id !== undefined && this.rqbitEmitter) {
       this.rqbitEmitter.deleteTorrent(task.torrent_id, true);
@@ -392,7 +394,7 @@ export class DownloadService {
       this.db.update(downloadTasksTable).set({
         status: "paused",
         updated_at: new Date().toISOString(),
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, task.progress, { status: "paused" });
       return true;
@@ -408,7 +410,7 @@ export class DownloadService {
       this.db.update(downloadTasksTable).set({
         status: "downloading",
         updated_at: new Date().toISOString(),
-      }).where("id = ?", [taskId]).run();
+      }).where(eq(downloadTasksTable.id, taskId)).run();
 
       getEventBus().emitDownloadProgress(taskId, task.user_id, task.progress, { status: "downloading" });
       return true;
@@ -425,7 +427,7 @@ export class DownloadService {
       this.torrentIdToTaskId.delete(task.torrent_id);
     }
 
-    this.db.delete(downloadTasksTable).where("id = ?", [taskId]).run();
+    this.db.delete(downloadTasksTable).where(eq(downloadTasksTable.id, taskId)).run();
     return true;
   }
 }

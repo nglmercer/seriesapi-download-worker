@@ -37,7 +37,7 @@ export async function startServer(config: WorkerConfig) {
   downloadService = new DownloadService(drizzle, fileService);
   await downloadService.recoverStaleDownloads();
 
-  setCompatDb(drizzle);
+  setCompatDb(drizzle, db);
   setCompatStorage(storage);
   setTranscodingContext(drizzle, fileService, storage);
   TranscodingService.initialize(drizzle, fileService, storage);
@@ -49,7 +49,7 @@ export async function startServer(config: WorkerConfig) {
   const wsServer = new WebSocketServer(config.mainApiUrl, config.sharedApiKey);
   wsServer.subscribeToEvents();
 
-  const router = createRouter(drizzle, fileService, config);
+  const router = createRouter(drizzle, db, fileService, config);
 
   const server = Bun.serve({
     port: config.port,

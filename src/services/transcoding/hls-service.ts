@@ -1,10 +1,11 @@
-import { getDb, drizzle } from "./compat";
+import { getDb, runRaw, queryRaw, getRaw, drizzle } from "./compat";
 import {
   mediaHlsOutputsTable,
   mediaHlsResourcesTable,
   mediaTasksTable,
   type QualityPreset,
 } from "../../schema/queue";
+import { eq, and } from "drizzle-orm";
 import {
   M3U8Parser,
   getQualityFromBandwidth,
@@ -68,68 +69,61 @@ export class HLSResourceService {
     if (!parsed) return [];
 
     const resources: HLSResource[] = [];
+    const db = getDb();
 
     if (parsed.type === "master" && parsed.masterInfo) {
       for (const variant of parsed.masterInfo.variants) {
         const quality = this.getQualityFromVariant(variant);
         const codecInfo = variant.codecs?.join(",") ?? null;
 
-        const result = getDb().run(
+        const result = runRaw(
           `INSERT INTO media_hls_resources
            (media_id, season_id, episode_id, resource_type, quality, resolution, lang, label,
             master_url, playlist_url, source_task_id, output_id, bandwidth, codec_info, is_available, is_active)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`,
-          [
-            mediaId,
-            options?.seasonId ?? null,
-            options?.episodeId ?? null,
-            "video",
-            quality,
-            variant.resolution ?? null,
-            null,
-            quality,
-            masterUrl,
-            variant.uri,
-            options?.taskId ?? null,
-            options?.outputId ?? null,
-            variant.bandwidth,
-            codecInfo,
-          ],
+          mediaId,
+          options?.seasonId ?? null,
+          options?.episodeId ?? null,
+          "video",
+          quality,
+          variant.resolution ?? null,
+          null,
+          quality,
+          masterUrl,
+          variant.uri,
+          options?.taskId ?? null,
+          options?.outputId ?? null,
+          variant.bandwidth,
+          codecInfo,
         );
 
-        const resource = drizzle
-          .query<HLSResource>("SELECT * FROM media_hls_resources WHERE id = ?")
-          .get([result.lastInsertRowid]);
+        const resource = getRaw<HLSResource>("SELECT * FROM media_hls_resources WHERE id = ?", Number(result.lastInsertRowid));
 
         if (resource) resources.push(resource);
       }
 
       for (const media of parsed.masterInfo.media) {
-        const result = getDb().run(
+        const result = runRaw(
           `INSERT INTO media_hls_resources
            (media_id, season_id, episode_id, resource_type, quality, resolution, lang, label,
             master_url, playlist_url, source_task_id, output_id, codec_info, is_available, is_active)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`,
-          [
-            mediaId,
-            options?.seasonId ?? null,
-            options?.episodeId ?? null,
-            media.type.toLowerCase(),
-            null,
-            null,
-            media.lang ?? null,
-            media.name,
-            masterUrl,
-            media.uri ?? null,
-            options?.taskId ?? null,
-            options?.outputId ?? null,
-            null,
-          ],
+          mediaId,
+          options?.seasonId ?? null,
+          options?.episodeId ?? null,
+          media.type.toLowerCase(),
+          null,
+          null,
+          media.lang ?? null,
+          media.name,
+          masterUrl,
+          media.uri ?? null,
+          options?.taskId ?? null,
+          options?.outputId ?? null,
+          null,
         );
 
-        const resource = drizzle
-          .query<HLSResource>("SELECT * FROM media_hls_resources WHERE id = ?")
-          .get([result.lastInsertRowid]);
+        const resource = getRaw<HLSResource>("SELECT * FROM media_hls_resources WHERE id = ?", Number(result.lastInsertRowid));
 
         if (resource) resources.push(resource);
       }
@@ -139,40 +133,40 @@ export class HLSResourceService {
   }
 
   async queryResources(query: ResourceQuery): Promise<HLSResource[]> {
-    let sql = "SELECT * FROM media_hls_resources WHERE 1=1";
+    let sqlStr = "SELECT * FROM media_hls_resources WHERE 1=1";
     const params: (string | number)[] = [];
 
     if (query.media_id) {
-      sql += " AND media_id = ?";
+      sqlStr += " AND media_id = ?";
       params.push(query.media_id);
     }
     if (query.season_id) {
-      sql += " AND season_id = ?";
+      sqlStr += " AND season_id = ?";
       params.push(query.season_id);
     }
     if (query.episode_id) {
-      sql += " AND episode_id = ?";
+      sqlStr += " AND episode_id = ?";
       params.push(query.episode_id);
     }
     if (query.quality) {
-      sql += " AND quality = ?";
+      sqlStr += " AND quality = ?";
       params.push(query.quality);
     }
     if (query.lang) {
-      sql += " AND lang = ?";
+      sqlStr += " AND lang = ?";
       params.push(query.lang);
     }
     if (query.resource_type) {
-      sql += " AND resource_type = ?";
+      sqlStr += " AND resource_type = ?";
       params.push(query.resource_type);
     }
     if (!query.include_unavailable) {
-      sql += " AND is_available = 1";
+      sqlStr += " AND is_available = 1";
     }
 
-    sql += " ORDER BY created_at DESC";
+    sqlStr += " ORDER BY created_at DESC";
 
-    return drizzle.query<HLSResource>(sql).all(params);
+    return queryRaw<HLSResource>(sqlStr, ...params);
   }
 
   async getAvailableQualities(
@@ -234,39 +228,35 @@ export class HLSResourceService {
   }
 
   async markUnavailable(resourceId: number): Promise<boolean> {
-    const result = getDb().run(
+    const result = runRaw(
       "UPDATE media_hls_resources SET is_available = 0, updated_at = ? WHERE id = ?",
-      [new Date().toISOString(), resourceId],
+      new Date().toISOString(), resourceId,
     );
     return result.changes > 0;
   }
 
   async deleteResource(resourceId: number): Promise<boolean> {
-    const result = getDb().run("DELETE FROM media_hls_resources WHERE id = ?", [
-      resourceId,
-    ]);
+    const result = runRaw("DELETE FROM media_hls_resources WHERE id = ?", resourceId);
     return result.changes > 0;
   }
 
   async cleanupDuplicateResources(mediaId: number): Promise<number> {
     let deleted = 0;
 
-    const resources = drizzle
-      .query<HLSResource>(
-        "SELECT * FROM media_hls_resources WHERE media_id = ? ORDER BY id ASC",
-      )
-      .all([mediaId]);
+    const resources = queryRaw<HLSResource>(
+      "SELECT * FROM media_hls_resources WHERE media_id = ? ORDER BY id ASC",
+      mediaId,
+    );
 
     const seen = new Map<string, number>();
 
     for (const r of resources) {
-      // Include label and playlist_url so regional variants are not dropped
       const key = `${r.resource_type}:${r.quality ?? ""}:${r.lang ?? ""}:${r.label ?? ""}:${r.playlist_url ?? ""}`;
 
       if (seen.has(key)) {
-        const result = getDb().run(
+        const result = runRaw(
           "DELETE FROM media_hls_resources WHERE id = ?",
-          [r.id],
+          r.id,
         );
         deleted += result.changes;
       } else {
@@ -341,36 +331,33 @@ export class OutputService {
       fileSize = info.fileSize;
     }
 
-    const existing = drizzle
-      .query<{
-        id: number;
-      }>("SELECT id FROM media_hls_outputs WHERE media_id = ? AND quality = ?")
-      .get([mediaId, options?.quality ?? null]);
+    const existing = getRaw<{ id: number }>(
+      "SELECT id FROM media_hls_outputs WHERE media_id = ? AND quality = ?",
+      mediaId, options?.quality ?? null,
+    );
 
     if (existing) {
       isPrimary = 1;
     }
 
-    const result = getDb().run(
+    const result = runRaw(
       `INSERT INTO media_hls_outputs
        (task_id, media_id, season_id, episode_id, m3u8_url, master_url, quality, resolution,
         bandwidth, is_active, is_primary, total_duration, segments_count, file_size)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-      [
-        taskId,
-        mediaId,
-        options?.seasonId ?? null,
-        options?.episodeId ?? null,
-        m3u8Url,
-        m3u8Url,
-        options?.quality ?? null,
-        options?.resolution ?? null,
-        options?.bandwidth ?? null,
-        isPrimary,
-        totalDuration,
-        segmentsCount,
-        fileSize,
-      ],
+      taskId,
+      mediaId,
+      options?.seasonId ?? null,
+      options?.episodeId ?? null,
+      m3u8Url,
+      m3u8Url,
+      options?.quality ?? null,
+      options?.resolution ?? null,
+      options?.bandwidth ?? null,
+      isPrimary,
+      totalDuration,
+      segmentsCount,
+      fileSize,
     );
 
     return Number(result.lastInsertRowid);
@@ -380,83 +367,73 @@ export class OutputService {
     mediaId: number,
     options?: { seasonId?: number; episodeId?: number; quality?: string },
   ) {
-    let sql = "SELECT * FROM media_hls_outputs WHERE media_id = ?";
+    let sqlStr = "SELECT * FROM media_hls_outputs WHERE media_id = ?";
     const params: (string | number)[] = [mediaId];
 
     if (options?.seasonId) {
-      sql += " AND season_id = ?";
+      sqlStr += " AND season_id = ?";
       params.push(options.seasonId);
     }
     if (options?.episodeId) {
-      sql += " AND episode_id = ?";
+      sqlStr += " AND episode_id = ?";
       params.push(options.episodeId);
     }
     if (options?.quality) {
-      sql += " AND quality = ?";
+      sqlStr += " AND quality = ?";
       params.push(options.quality);
     }
 
-    sql += " ORDER BY created_at DESC";
+    sqlStr += " ORDER BY created_at DESC";
 
-    return drizzle.query(sql).all(params);
+    return queryRaw(sqlStr, ...params);
   }
 
   async getPrimaryOutput(
     mediaId: number,
     options?: { seasonId?: number; episodeId?: number },
   ) {
-    let sql =
-      "SELECT * FROM media_hls_outputs WHERE media_id = ? AND is_primary = 1";
+    let sqlStr = "SELECT * FROM media_hls_outputs WHERE media_id = ? AND is_primary = 1";
     const params: (string | number)[] = [mediaId];
 
     if (options?.seasonId) {
-      sql += " AND season_id = ?";
+      sqlStr += " AND season_id = ?";
       params.push(options.seasonId);
     }
     if (options?.episodeId) {
-      sql += " AND episode_id = ?";
+      sqlStr += " AND episode_id = ?";
       params.push(options.episodeId);
     }
 
-    return drizzle.query(sql).get(params);
+    return getRaw(sqlStr, ...params);
   }
 
   async setPrimaryOutput(outputId: number): Promise<boolean> {
-    const output = drizzle
-      .query<{
-        media_id: number;
-        season_id?: number;
-        episode_id?: number;
-      }>(
-        "SELECT media_id, season_id, episode_id FROM media_hls_outputs WHERE id = ?",
-      )
-      .get([outputId]);
+    const output = getRaw<{ media_id: number; season_id?: number; episode_id?: number }>(
+      "SELECT media_id, season_id, episode_id FROM media_hls_outputs WHERE id = ?",
+      outputId,
+    );
 
     if (!output) return false;
 
-    getDb().run(
+    runRaw(
       "UPDATE media_hls_outputs SET is_primary = 0 WHERE media_id = ? AND (season_id IS ? OR (? IS NULL AND season_id IS NULL)) AND (episode_id IS ? OR (? IS NULL AND episode_id IS NULL))",
-      [
-        output.media_id,
-        output.season_id ?? null,
-        output.season_id ?? null,
-        output.episode_id ?? null,
-        output.episode_id ?? null,
-      ],
+      output.media_id,
+      output.season_id ?? null,
+      output.season_id ?? null,
+      output.episode_id ?? null,
+      output.episode_id ?? null,
     );
 
-    const result = getDb().run(
+    const result = runRaw(
       "UPDATE media_hls_outputs SET is_primary = 1 WHERE id = ?",
-      [outputId],
+      outputId,
     );
 
     return result.changes > 0;
   }
 
   async deleteOutput(outputId: number): Promise<boolean> {
-    const result = getDb().run("DELETE FROM media_hls_outputs WHERE id = ?", [
-      outputId,
-    ]);
+    const result = runRaw("DELETE FROM media_hls_outputs WHERE id = ?", outputId);
     return result.changes > 0;
   }
 
@@ -466,43 +443,33 @@ export class OutputService {
     m3u8Url: string,
     options?: { resolution?: string; bandwidth?: number; localPath?: string },
   ): Promise<boolean> {
-    const existing = drizzle
-      .query<{
-        task_id: number;
-        media_id: number;
-        season_id?: number;
-        episode_id?: number;
-      }>(
-        "SELECT task_id, media_id, season_id, episode_id FROM media_hls_outputs WHERE id = ?",
-      )
-      .get([outputId]);
+    const existing = getRaw<{ task_id: number; media_id: number; season_id?: number; episode_id?: number }>(
+      "SELECT task_id, media_id, season_id, episode_id FROM media_hls_outputs WHERE id = ?",
+      outputId,
+    );
 
     if (!existing) return false;
 
-    const result = getDb().run(
+    const result = runRaw(
       `INSERT INTO media_hls_outputs
        (task_id, media_id, season_id, episode_id, m3u8_url, master_url, quality, resolution, bandwidth, is_active, is_primary)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
-      [
-        existing.task_id,
-        existing.media_id,
-        existing.season_id ?? null,
-        existing.episode_id ?? null,
-        m3u8Url,
-        m3u8Url,
-        quality,
-        options?.resolution ?? null,
-        options?.bandwidth ?? null,
-      ],
+      existing.task_id,
+      existing.media_id,
+      existing.season_id ?? null,
+      existing.episode_id ?? null,
+      m3u8Url,
+      m3u8Url,
+      quality,
+      options?.resolution ?? null,
+      options?.bandwidth ?? null,
     );
 
     return Number(result.lastInsertRowid) > 0;
   }
 
   async getOutputById(outputId: number) {
-    return drizzle
-      .query("SELECT * FROM media_hls_outputs WHERE id = ?")
-      .get([outputId]);
+    return getRaw("SELECT * FROM media_hls_outputs WHERE id = ?", outputId);
   }
 
   async updateOutput(
@@ -547,9 +514,9 @@ export class OutputService {
     if (sets.length === 0) return false;
 
     params.push(outputId);
-    const result = getDb().run(
+    const result = runRaw(
       `UPDATE media_hls_outputs SET ${sets.join(", ")} WHERE id = ?`,
-      params,
+      ...params,
     );
 
     return result.changes > 0;
